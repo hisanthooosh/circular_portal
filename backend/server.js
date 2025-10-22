@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const circularRoutes = require('./routes/circulars');
 const systemRoutes = require('./routes/systems');
 const userRoutes = require('./routes/users'); // This line is added
+const signatoryRoutes = require('./routes/signatories'); // Add this line
 
 // Initialize the app
 const app = express();
@@ -31,6 +32,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/circulars', circularRoutes);
 app.use('/api/systems', systemRoutes);
 app.use('/api/users', userRoutes); // This line is added
+app.use('/api/signatories', signatoryRoutes); // Add this line
 
 app.get('/', (req, res) => {
     res.send('Circular Portal Backend is running!');

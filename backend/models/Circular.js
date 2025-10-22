@@ -2,51 +2,61 @@ const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
 const CircularSchema = new mongoose.Schema({
-    // --- Basic Info (from before) ---
-    circularNumber: { type: String, required: true },
-    title: { type: String, required: true },
-    date: { type: Date, required: true },
-    body: { type: String, required: true },
-    agendaPoints: [String],
-    issuedBy: { type: String, required: true },
-    copyTo: [String],
-    
-    // --- NEW Workflow and Approval Fields ---
-    status: {
+    // --- OLD Fields Removed ---
+    // title: String,
+    // issuedBy: String,
+
+    // --- NEW Core Fields ---
+    type: { // Replaces 'title'
         type: String,
         required: true,
-        enum: [
-            'Draft',              // Created but not submitted yet
-            'Pending Super Admin',// Submitted by Creator, waiting for Super Admin
-            'Pending Higher Approval',// Submitted by Super Admin, waiting for Approver
-            'Approved',           // Fully approved, ready to be sent
-            'Rejected',           // Rejected by Super Admin or Approver
-            'Published'           // Sent to the final viewers
-        ],
-        default: 'Draft',
+        enum: ['Circular', 'Order', 'Memo'],
+        default: 'Circular',
     },
-    author: {
-        type: Schema.Types.ObjectId, // A link to the user who created it
-        ref: 'User',                 // This refers to our 'User' model
+    subject: { // New field for description
+        type: String,
         required: true,
     },
-    rejectionReason: {
-        type: String, // A message from the Super Admin if they reject it
-    },
-    // --- Fields for Higher Approval ---
-    approvers: [{
-        user: { type: Schema.Types.ObjectId, ref: 'User' },
-        decision: { type: String, enum: ['Approved', 'Rejected', 'Request Meeting', 'Pending'], default: 'Pending' },
-        feedback: String,
+    body: { type: String, required: true },
+    circularNumber: { type: String, required: true },
+    date: { type: Date, required: true },
+
+    // --- NEW Signatories Field ---
+    signatories: [{
+        authority: {
+            type: Schema.Types.ObjectId,
+            ref: 'SignatoryAuthority', // Link to the new model
+            required: true
+        },
+        order: { // To control the display order
+            type: Number,
+            required: true,
+            default: 1,
+        },
+        // Position is stored in the SignatoryAuthority model, but we might copy it here for historical record? For now, just link.
     }],
-    // --- Fields for Final Distribution ---
-    viewers: [{
-        type: Schema.Types.ObjectId, ref: 'User'
-    }],
-    publishedAt: {
-        type: Date, // The date it was sent to viewers
-    }
+
+    // --- Workflow Fields (remain the same) ---
+    status: { type: String, required: true, enum: ['Draft','Pending Super Admin','Pending Higher Approval','Approved','Rejected','Published'], default: 'Draft'},
+    author: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    rejectionReason: { type: String },
+    approvers: [{ user: { type: Schema.Types.ObjectId, ref: 'User' }, decision: { type: String, enum: ['Approved', 'Rejected', 'Request Meeting', 'Pending'], default: 'Pending' }, feedback: String }],
+    viewers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+    publishedAt: { type: Date },
+
+    // --- Other fields (can keep or remove as needed) ---
+    agendaPoints: [String], // Still relevant? Keep for now.
+    copyTo: [String], // Still relevant? Keep for now.
+
 }, { timestamps: true });
 
-module.exports = mongoose.model('Circular', CircularSchema);
+// Ensure correct display order for signatories if needed later
+CircularSchema.pre('save', function(next) {
+    if (this.signatories && this.signatories.length > 0) {
+        this.signatories.sort((a, b) => a.order - b.order);
+    }
+    next();
+});
 
+
+module.exports = mongoose.model('Circular', CircularSchema);
