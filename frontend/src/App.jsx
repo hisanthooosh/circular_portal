@@ -21,6 +21,8 @@ const IconDelete = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-4 
 const IconSignatories = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>; // New Icon
 const IconAdd = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>;
 const IconRemove = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 12H6" /></svg>;
+const IconMenu = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>;
+const IconClose = () => <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>;
 
 function App() {
     const [page, setPage] = useState('login');
@@ -34,6 +36,9 @@ function App() {
     const [approvers, setApprovers] = useState([]);
     const [signatories, setSignatories] = useState([]); // New state for signatories
 
+    const [allUsersOverview, setAllUsersOverview] = useState([]); // State for the SA overview 
+    const [allCircularsOverview, setAllCircularsOverview] = useState([]); // State for SA Circulars Overview
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false); // State for sidebar visibility
     // State for modals and interaction
     const [circularToReview, setCircularToReview] = useState(null);
     const [isReviewModalOpen, setReviewModalOpen] = useState(false);
@@ -45,14 +50,45 @@ function App() {
     const [isAdminReviewModalOpen, setIsAdminReviewModalOpen] = useState(false); // For Admin review
 
     const api = useMemo(() => ({
+
         fetchWithAuth: async (url, options = {}) => {
-            const headers = { 'Content-Type': 'application/json', ...options.headers };
-            if (token) headers['x-auth-token'] = token;
-            const response = await fetch(`${API_BASE_URL}${url}`, { ...options, headers });
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+            // Get the LATEST token from localStorage right before making the call
+            const currentToken = localStorage.getItem('token');
+            console.log(`FRONTEND: fetchWithAuth called for ${url}. Token being sent: ${currentToken ? currentToken.substring(0, 10) + '...' : 'None'}`); // Log token being used
+
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers,
+            };
+            // Use the currentToken fetched just now
+            if (currentToken) {
+                headers['x-auth-token'] = currentToken;
+            } else {
+                console.warn(`FRONTEND: No token found in localStorage for request to ${url}`);
+                // Depending on your API design, you might want to throw an error here
+                // or let the backend handle the missing token (which it does via authMiddleware)
             }
+
+            const response = await fetch(`${API_BASE_URL}${url}`, { ...options, headers });
+
+            if (!response.ok) {
+                let errorData = { message: `HTTP error! status: ${response.status} ${response.statusText}` };
+                try {
+                    // Try to parse detailed error message from backend
+                    const backendError = await response.json();
+                    errorData.message = backendError.message || errorData.message;
+                } catch (e) { /* Ignore if response body is not JSON */ }
+                console.error(`FRONTEND: API Error on ${url}:`, errorData.message); // Log the error
+                throw new Error(errorData.message);
+            }
+
+            // Handle empty responses (like DELETE)
+            const contentType = response.headers.get("content-type");
+            if (response.status === 204 || !contentType || !contentType.includes("application/json")) {
+                // Assume success if status is 204 No Content or response isn't JSON
+                return { success: true };
+            }
+            // Otherwise, parse and return JSON body
             return response.json();
         },
         login: (email, password) => fetch(`${API_BASE_URL}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) }).then(res => res.ok ? res.json() : res.json().then(err => Promise.reject(err))),
@@ -67,6 +103,9 @@ function App() {
         deleteUser: (id) => api.fetchWithAuth(`/users/${id}`, { method: 'DELETE' }),
         // New Signatory API functions
         getSignatories: () => api.fetchWithAuth('/signatories'),
+        getAllUsers: () => api.fetchWithAuth('/users/all'), // Calls the new backend route
+
+        getAllCirculars: () => api.fetchWithAuth('/circulars/all'), // Calls the new backend route
         createSignatory: (data) => api.fetchWithAuth('/signatories', { method: 'POST', body: JSON.stringify(data) }),
         deleteSignatory: (id) => api.fetchWithAuth(`/signatories/${id}`, { method: 'DELETE' }),
         deleteCircular: (id) => api.fetchWithAuth(`/circulars/${id}`, { method: 'DELETE' }),
@@ -102,16 +141,45 @@ function App() {
         }
     };
 
+    // Updated function to load users (for SA and Admin) and approvers (for SA only)
     const loadUsersAndApprovers = async () => {
-        if (!token || currentUser?.role !== 'Super Admin') return;
+        // UPDATED CHECK: Allow SA or Admin to load users
+        if (!token || !currentUser || (currentUser?.role !== 'Super Admin' && currentUser?.role !== 'Admin')) {
+            console.log("loadUsersAndApprovers skipped: User not SA or Admin, or not logged in.");
+            // Ensure users list is empty if not authorized or not logged in
+            setUsers([]);
+            setApprovers([]);
+            return;
+        }
+
+        // ADDED LOG: Check role before fetch
+        console.log(`FRONTEND: Attempting to load users. Current user role: ${currentUser?.role}`);
+
         setIsLoading(true);
         setError('');
         try {
+            // This calls GET /api/users - backend handles filtering based on role
             const userData = await api.getUsers();
-            setUsers(userData);
-            setApprovers(userData.filter(u => u.role === 'Circular Approver'));
+
+            // ADDED LOG: See what data arrived from the backend
+            console.log(`FRONTEND: Received ${userData.length} users:`, userData);
+
+            setUsers(userData); // Update the main users list with whatever the backend sent
+
+            // UPDATED: Only Super Admin needs to populate the separate 'approvers' list
+            // (This list is used in the SA's review modal)
+            if (currentUser?.role === 'Super Admin') {
+                setApprovers(userData.filter(u => u.role === 'Circular Approver'));
+                console.log("FRONTEND: Filtered approvers for SA:", approvers);
+            } else {
+                // Admin doesn't need the separate approvers list, ensure it's empty
+                setApprovers([]);
+            }
         } catch (err) {
+            console.error("FRONTEND: Error loading users:", err); // Log error
             setError(err.message);
+            setUsers([]); // Clear users on error
+            setApprovers([]); // Clear approvers on error
             if (err.message.includes('401')) handleLogout();
         } finally {
             setIsLoading(false);
@@ -134,60 +202,140 @@ function App() {
         }
     };
 
+    // New function to load ALL users for SA overview
+    const loadAllUsersData = async () => {
+        if (!token || currentUser?.role !== 'Super Admin') return; // Strictly SA only
+        console.log("FRONTEND: loadAllUsersData called..."); // <<< ADD LOG
+        setIsLoading(true);
+        setError('');
+        try {
+            const allUserData = await api.getAllUsers(); // Calls GET /api/users/all
+            // ---> ADD THIS LOG <---
+            console.log("FRONTEND: Received data from /api/users/all:", allUserData);
+            setAllUsersOverview(allUserData); // Update state
+        } catch (err) {
+            console.error("FRONTEND: Error in loadAllUsersData:", err); // <<< ADD LOG
+            setError(err.message);
+            setAllUsersOverview([]); // Ensure state is empty array on error
+            if (err.message.includes('401')) handleLogout();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // New function to load ALL circulars for SA overview
+    const loadAllCircularsData = async () => {
+        if (!token || currentUser?.role !== 'Super Admin') return; // Strictly SA only
+        console.log("FRONTEND: loadAllCircularsData called...");
+        setIsLoading(true);
+        setError('');
+        try {
+            const allCircularData = await api.getAllCirculars();
+            console.log("FRONTEND: Received data from /api/circulars/all:", allCircularData);
+            setAllCircularsOverview(allCircularData);
+        } catch (err) {
+            console.error("FRONTEND: Error in loadAllCircularsData:", err);
+            setError(err.message);
+            setAllCircularsOverview([]);
+            if (err.message.includes('401')) handleLogout();
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
     // Combined effect to load data based on page AND role access
+    // Combined effect to load data based on page AND role access// --- CORRECTED useEffect for Data Loading ---
     useEffect(() => {
-        const loadDataForPage = async () => {
-            // Ensure we only load data if logged in
-            if (!token || !currentUser) {
-                // If not logged in and not on login page, force logout/redirect
-                if (page !== 'login') {
-                    handleLogout();
-                }
-                return;
-            }
+        // Only run if we have a token and user info (avoids running on initial load/logout)
+        if (!token || !currentUser) {
+            // Clear data if logged out or token invalid
+            setCirculars([]);
+            setUsers([]);
+            setApprovers([]);
+            setSignatories([]);
+            setAllUsersOverview([]);
+            setAllCircularsOverview([]); // Clear any other data states too
+            console.log("useEffect: Skipping data load - No token or currentUser.");
+            return; // Stop execution
+        }
 
-            setError(''); // Clear previous errors on page change
-            setIsLoading(true); // Set loading true at the start of any data fetch
+        console.log(`useEffect triggered for page: ${page}. Current User Role: ${currentUser.role}`);
+        setError(''); // Clear errors on page change/reload
+        setIsLoading(true); // Set loading true for all data fetches triggered by page change
 
+        // Define an async function to fetch data based on page and role
+        const fetchData = async () => {
             try {
+                // Fetch data common to multiple roles first? (e.g., circulars)
                 if (page === 'dashboard') {
-                    await loadDashboardData(); // Ensure await completes
-                }
-                // Only load users/approvers/signatories if SA
-                if (currentUser.role === 'Super Admin') {
-                    if (page === 'manageUsers') await loadUsersAndApprovers();
-                    if (page === 'manageSignatories') await loadSignatories();
-                    // Also load approvers if review modal might open (needed for review modal)
-                    if (page === 'dashboard' && approvers.length === 0) await loadUsersAndApprovers(); // Load approvers for SA dashboard review
-                }
-                // --- THIS IS THE FIX ---
-                // Load signatories if on create page (Creator or SA) - ALWAYS load
-                if (page === 'create') {
-                    console.log("Navigated to create page, attempting to load signatories..."); // Debug log
-                    // CallgetSignatories directly or create a specific loader function
-                    try {
-                        const sigData = await api.getSignatories();
-                        setSignatories(sigData);
-                        console.log("Signatories loaded:", sigData); // Debug log
-                    } catch (err) {
-                        console.error("Error loading signatories for create page:", err); // Debug log
-                        setError("Could not load signatories list. Please ensure you are logged in and try again.");
-                        setSignatories([]); // Ensure list is empty on error
-                        if (err.message.includes('401')) handleLogout();
+                    const circData = await api.getCirculars();
+                    setCirculars(circData);
+                    // SA might also need approvers list for review modal on dashboard
+                    if (currentUser.role === 'Super Admin') {
+                        const userData = await api.getUsers(); // Use the filtered GET /api/users
+                        setApprovers(userData.filter(u => u.role === 'Circular Approver'));
                     }
                 }
+                // Fetch data specific to Super Admin pages
+                else if (currentUser.role === 'Super Admin') {
+                    if (page === 'manageUsers') {
+                        const userData = await api.getUsers(); // Fetches SA's direct reports + Admins
+                        setUsers(userData);
+                    } else if (page === 'manageSignatories') {
+                        const sigData = await api.getSignatories();
+                        setSignatories(sigData);
+                    } else if (page === 'allUsersOverview') {
+                        const allUserData = await api.getAllUsers(); // Fetches ALL users
+                        setAllUsersOverview(allUserData);
+                    } else if (page === 'allCircularsOverview') { // Added missing page
+                        const allCircData = await api.getAllCirculars();
+                        setAllCircularsOverview(allCircData);
+                    }
+                    // Load signatories if SA navigates to create page
+                    else if (page === 'create') {
+                        const sigData = await api.getSignatories();
+                        setSignatories(sigData);
+                    }
+
+                }
+                // Fetch data specific to Admin pages
+                else if (currentUser.role === 'Admin') {
+                    if (page === 'manageUsers') {
+                        const userData = await api.getUsers(); // Fetches Admin's direct reports
+                        setUsers(userData);
+                    }
+                    // Load signatories if Admin navigates to create page
+                    else if (page === 'create') {
+                        const sigData = await api.getSignatories();
+                        setSignatories(sigData);
+                    }
+                }
+                // Fetch data specific to Creator pages (mostly covered by dashboard load)
+                else if (currentUser.role === 'Circular Creator') {
+                    // Load signatories if Creator navigates to create page
+                    if (page === 'create') {
+                        const sigData = await api.getSignatories();
+                        setSignatories(sigData);
+                    }
+                }
+                // Add logic for Approver/Viewer dashboards later if needed
+
             } catch (err) {
-                // General error handling if needed, though specific loaders handle theirs
-                console.error("Error in page load useEffect:", err);
-                setError(err.message || "An error occurred loading page data.");
-                if (err.message && err.message.includes('401')) handleLogout();
+                console.error(`FRONTEND: Error loading data for page ${page}:`, err);
+                setError(err.message || `Failed to load data for ${page}.`);
+                if (err.message && (err.message.includes('401') || err.message.includes('authorization denied'))) {
+                    handleLogout(); // Force logout on auth errors
+                }
             } finally {
-                setIsLoading(false); // Set loading false after all attempts
+                setIsLoading(false); // Set loading false after attempts finish
             }
         };
-        loadDataForPage();
-    }, [page, token, currentUser]); // Rerun when page, token, or user changes
 
+        fetchData(); // Execute the async data fetching function
+
+        // Dependencies: Re-run when page changes, token changes, or user object changes
+    }, [page, token, currentUser, api]); // Added api as dependency because it depends on token
+    // --- END CORRECTION ---
     const handleLogin = async (email, password) => {
         setIsLoading(true);
         setError('');
@@ -205,12 +353,22 @@ function App() {
         }
     };
 
+    // --- CORRECTED handleLogout ---
     const handleLogout = () => {
+        console.log("FRONTEND: Logging out..."); // Add log for debugging
         localStorage.removeItem('token');
         setToken(null);
-        setCurrentUser(null);
-        setPage('login');
+        setCurrentUser(null); // Clear the current user state
+        setPage('login');     // Navigate to login page
+
+        // --- IMPORTANT: Clear all fetched data states ---
+        setCirculars([]);
+        setUsers([]);
+        setApprovers([]);
+        setSignatories([]);
+        setError(''); // Clear any existing errors
     };
+    // --- END CORRECTION ---
 
     // Replace the entire old handleCreateCircular function (around Line 170) with this:
     const handleCreateCircular = async (circularData, andSubmit = false) => {
@@ -411,6 +569,12 @@ function App() {
                 error={error}                     // We added this earlier
                 circularToEdit={circularToEdit} // <<< ADD THIS PROP
             />;
+            // --- ADD THIS CASE ---
+            case 'allUsersOverview': return <AllUsersOverviewPage allUsers={allUsersOverview} currentUser={currentUser} />;
+            // --- ADD THIS CASE ---
+            case 'allCircularsOverview': return <AllCircularsOverviewPage allCirculars={allCircularsOverview} onView={(c) => { setCircularToView(c); setPage('view'); }} availableSignatories={signatories} />;
+            // --- END ADD ---
+            // --- END ADD ---
             // Add this case:
             case 'manageUsers': return <ManageUsersPage users={users} onAddUser={handleCreateUser} onDeleteUser={handleDeleteUser} error={error} currentUser={currentUser} />;
             case 'view': return <ViewCircularPage circular={circularToView} onBack={() => setPage('dashboard')} availableSignatories={signatories} />;
@@ -422,10 +586,20 @@ function App() {
 
     return (
         <div className="bg-gray-100 min-h-screen font-sans">
-            {currentUser && <Header onLogout={handleLogout} setPage={setPage} currentPage={page} currentUser={currentUser} />}
+            {/* To this: */}
+            {currentUser && <Header onLogout={handleLogout} setPage={setPage} currentPage={page} currentUser={currentUser} onOpenSidebar={() => setIsSidebarOpen(true)} />}
+            {/* ... rest of the return ... */}
             <main className="container mx-auto p-4 sm:p-6 lg:p-8">
                 {renderPage()}
             </main>
+            {/* --- ADD Sidebar Rendering --- */}
+            <SidebarMenu
+                isOpen={isSidebarOpen}
+                onClose={() => setIsSidebarOpen(false)}
+                setPage={setPage}
+                currentUser={currentUser}
+            />
+            {/* --- END Sidebar Rendering --- */}
             {isReviewModalOpen && (
                 <ReviewModal
                     circular={circularToReview}
@@ -449,40 +623,34 @@ function App() {
 
 // --- Components (Styled with the light theme) ---
 
-function Header({ onLogout, setPage, currentPage, currentUser }) {
+function Header({ onLogout, setPage, currentPage, currentUser, onOpenSidebar }) {
     const navItemBase = "flex items-center py-2 px-4 rounded-lg text-sm font-medium transition-colors duration-200";
     const activeClass = "bg-blue-600 text-white shadow";
     const inactiveClass = "text-gray-600 hover:bg-gray-200";
 
     return (
         <header className="bg-white shadow-md mb-8">
+
             <nav className="container mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
+
                 <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setPage('dashboard')}>
+                    {/* --- ADD THIS MENU BUTTON --- */}
+                    <button
+                        onClick={onOpenSidebar}
+                        className="p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500 ml-3" // Added margin-left
+                        aria-label="Open menu"
+                    >
+                        <IconMenu />
+                    </button>
+                    {/* --- END MENU BUTTON --- */}
+
                     <svg className="h-8 w-8 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M12 21v-8.25M15.75 21v-8.25M8.25 21v-8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0012 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75z" />
                     </svg>
                     <h1 className="text-xl sm:text-2xl font-bold text-gray-800">Circular Portal</h1>
                 </div>
                 <div className="flex items-center space-x-2 sm:space-x-4">
-                    <ul className="hidden sm:flex items-center space-x-2">
-                        {/* Dashboard visible to all logged-in users */}
-                        <li><button onClick={() => setPage('dashboard')} className={`${navItemBase} ${currentPage === 'dashboard' ? activeClass : inactiveClass}`}><IconDashboard /> Dashboard</button></li>
 
-                        {/* New Circular visible to SA, Admin, and CC */}
-                        {(currentUser.role === 'Super Admin' || currentUser.role === 'Admin' || currentUser.role === 'Circular Creator') && (
-                            <li><button onClick={() => setPage('create')} className={`${navItemBase} ${currentPage === 'create' ? activeClass : inactiveClass}`}><IconNewCircular /> New Circular</button></li>
-                        )}
-
-                        {/* Manage Users visible to SA and Admin */}
-                        {(currentUser.role === 'Super Admin' || currentUser.role === 'Admin') && (
-                            <li><button onClick={() => setPage('manageUsers')} className={`${navItemBase} ${currentPage === 'manageUsers' ? activeClass : inactiveClass}`}><IconManageUsers /> Manage Users</button></li>
-                        )}
-
-                        {/* Signatories visible only to SA */}
-                        {currentUser.role === 'Super Admin' && (
-                            <li><button onClick={() => setPage('manageSignatories')} className={`${navItemBase} ${currentPage === 'manageSignatories' ? activeClass : inactiveClass}`}><IconSignatories /> Signatories</button></li>
-                        )}
-                    </ul>
                     <div className="flex items-center space-x-2">
                         <span className="text-sm text-gray-500 hidden lg:block">Welcome, {currentUser.name}</span>
                         <button onClick={onLogout} className="flex items-center bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors duration-200">
@@ -658,8 +826,12 @@ function DashboardPage({ circulars, currentUser, onSubmitForApproval, onReview, 
                                 </td>
                             </tr>
                         )) : (
-                            <td colSpan={currentUser.role === 'Circular Approver' ? 6 : 5} className="text-center py-10 text-gray-500">No circulars found.</td>
+                            <tr>
+
+                                <td colSpan={currentUser.role === 'Circular Approver' ? 6 : 5} className="text-center py-10 text-gray-500">No circulars found.</td>
+                            </tr>
                         )}
+
                     </tbody>
                 </table>
             </div>
@@ -974,18 +1146,95 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
         </div>
     );
 }
-function ManageUsersPage({ users, onAddUser, onDeleteUser, error, currentUser }) { // Add currentUser prop
+// --- UPDATED ManageUsersPage (Handles SA view with two tables) ---
+function ManageUsersPage({ users = [], onAddUser, onDeleteUser, error, currentUser }) { // Added default for users
+    // --- Log 1: Check props received ---
+    console.log("ManageUsersPage: Component rendered. Received props:", { users, currentUser, error });
+
+    // --- State Definition ---
     const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'Circular Creator', department: '' });
 
+    // --- Filter users for Super Admin view ---
+    const adminUsers = useMemo(() => {
+        if (currentUser?.role !== 'Super Admin' || !users) return [];
+        return users.filter(user => user.role === 'Admin');
+    }, [users, currentUser]);
+
+    const managedUsersBySA = useMemo(() => {
+        if (currentUser?.role !== 'Super Admin' || !users) return [];
+        // Filter for non-Admins who are managed by the current SA or have no manager (legacy)
+        return users.filter(user => user.role !== 'Admin' && (user.managedBy?._id === currentUser.id || !user.managedBy));
+    }, [users, currentUser]);
+
+
+    // --- Log 2: Check users array ---
+    console.log(`ManageUsersPage: About to render. Role: ${currentUser?.role}. Total users received: ${users?.length}. Admins: ${adminUsers.length}. SA Managed: ${managedUsersBySA.length}`);
+
+    // --- Event Handlers ---
     const handleChange = (e) => setNewUser({ ...newUser, [e.target.name]: e.target.value });
     const handleSubmit = (e) => {
         e.preventDefault();
         onAddUser(newUser);
-        setNewUser({ name: '', email: '', password: '', role: 'Circular Creator', department: '' });
+        // Reset role based on who is logged in
+        const defaultRole = currentUser?.role === 'Super Admin' ? 'Admin' : 'Circular Creator';
+        setNewUser({ name: '', email: '', password: '', role: defaultRole, department: '' });
     };
 
+    // Helper component for rendering the user table (to avoid repetition)
+    const UserTable = ({ userList, title }) => (
+        <div className="bg-white p-6 rounded-lg shadow-lg">
+            <h3 className="text-xl font-bold mb-4 text-gray-800">{title} ({userList ? userList.length : 0})</h3>
+            <div className="overflow-x-auto">
+                <table className="min-w-full bg-white">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                            {/* Only show Manager column if SA is viewing managed users */}
+                            {currentUser?.role === 'Super Admin' && title.includes("Managed") && (
+                                <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Manager</th>
+                            )}
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {userList && userList.length > 0 ? userList.map(user => (
+                            <tr key={user._id} className="hover:bg-gray-50">
+                                <td className="py-3 px-4 font-medium text-gray-900">{user.name}</td>
+                                <td className="py-3 px-4 text-gray-500">{user.email}</td>
+                                <td className="py-3 px-4">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full
+                                         ${user.role === 'Super Admin' ? 'bg-red-100 text-red-800' : ''}
+                                         ${user.role === 'Admin' ? 'bg-purple-100 text-purple-800' : ''}
+                                         ${user.role === 'Circular Creator' ? 'bg-blue-100 text-blue-800' : ''}
+                                         ${user.role === 'Circular Approver' ? 'bg-yellow-100 text-yellow-800' : ''}
+                                         ${user.role === 'Circular Viewer' ? 'bg-green-100 text-green-800' : ''}
+                                     `}>{user.role}</span>
+                                </td>
+                                {/* Only show Manager column if SA is viewing managed users */}
+                                {currentUser?.role === 'Super Admin' && title.includes("Managed") && (
+                                    <td className="py-3 px-4 text-gray-500 text-sm">{user.managedBy?.name || 'Super Admin (Direct)'}</td>
+                                )}
+                                <td className="py-3 px-4">
+                                    {currentUser?.id !== user._id && ( // Prevent deleting self
+                                        <button onClick={() => onDeleteUser(user._id)} className="text-red-600 hover:text-red-900">Delete</button>
+                                    )}
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr><td colSpan={currentUser?.role === 'Super Admin' && title.includes("Managed") ? 5 : 4} className="text-center py-4 text-gray-500">No users found in this category.</td></tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+
+    // --- Render Logic ---
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            {/* Form Column (Always Visible) */}
             <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-lg">
                 <h3 className="text-xl font-bold mb-4 text-gray-800">Add New User</h3>
                 <form onSubmit={handleSubmit} className="space-y-4">
@@ -1005,23 +1254,13 @@ function ManageUsersPage({ users, onAddUser, onDeleteUser, error, currentUser })
                     <div>
                         <label className="block font-bold text-gray-700">Role</label>
                         <select name="role" value={newUser.role} onChange={handleChange} className="mt-1 p-2 border rounded-md w-full bg-white">
-                            {/* SA can create Admin, CC, CA, CV */}
-                            {currentUser.role === 'Super Admin' && (
-                                <>
-                                    <option value="Admin">Admin</option>
-                                    <option value="Circular Creator">Circular Creator</option>
-                                    <option value="Circular Approver">Circular Approver</option>
-                                    <option value="Circular Viewer">Circular Viewer</option>
-                                    {/* <option value="Super Admin">Super Admin</option> */}{/* Decide if SA can create another SA */}
-                                </>
-                            )}
-                            {/* Admin can only create CC, CV */}
-                            {currentUser.role === 'Admin' && (
-                                <>
-                                    <option value="Circular Creator">Circular Creator</option>
-                                    <option value="Circular Viewer">Circular Viewer</option>
-                                </>
-                            )}
+                            {currentUser?.role === 'Super Admin' && <option value="Admin">Admin</option>}
+                            {/* Allow SA/Admin to create CC/CV */}
+                            {(currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin') && <option value="Circular Creator">Circular Creator</option>}
+                            {currentUser?.role === 'Super Admin' && <option value="Circular Approver">Circular Approver</option>}
+                            {(currentUser?.role === 'Super Admin' || currentUser?.role === 'Admin') && <option value="Circular Viewer">Circular Viewer</option>}
+                            {/* SA creating another SA? Generally discouraged. */}
+                            {/* {currentUser?.role === 'Super Admin' && <option value="Super Admin">Super Admin</option>} */}
                         </select>
                     </div>
                     <div>
@@ -1031,45 +1270,27 @@ function ManageUsersPage({ users, onAddUser, onDeleteUser, error, currentUser })
                     <button type="submit" className="w-full bg-blue-600 text-white py-2 rounded-md hover:bg-blue-700">Add User</button>
                 </form>
             </div>
-            <div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-lg">
-                <h3 className="text-xl font-bold mb-4 text-gray-800">Existing Users ({users.length})</h3>
-                <div className="overflow-x-auto">
-                    <table className="min-w-full bg-white">
-                        <thead className="bg-gray-50">
-                            <tr>
-                                <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
-                                <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
-                                <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
-                                <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                            {users.map(user => (
-                                <tr key={user._id} className="hover:bg-gray-50">
-                                    <td className="py-3 px-4 font-medium text-gray-900">{user.name}</td>
-                                    <td className="py-3 px-4 text-gray-500">{user.email}</td>
-                                    <td className="py-3 px-4">
-                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
-                                            ${user.role === 'Super Admin' ? 'bg-red-100 text-red-800' : ''}
-                                            ${user.role === 'Circular Creator' ? 'bg-blue-100 text-blue-800' : ''}
-                                            ${user.role === 'Circular Approver' ? 'bg-yellow-100 text-yellow-800' : ''}
-                                            ${user.role === 'Circular Viewer' ? 'bg-green-100 text-green-800' : ''}
-                                        `}>{user.role}</span>
-                                    </td>
-                                    <td className="py-3 px-4">
-                                        <button onClick={() => onDeleteUser(user._id)} className="text-red-600 hover:text-red-900">Delete</button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+
+            {/* List Column(s) */}
+            <div className="lg:col-span-2 space-y-8">
+                {/* --- Conditional Rendering for Tables --- */}
+                {currentUser?.role === 'Super Admin' ? (
+                    <>
+                        {/* Table 1: Admins */}
+                        <UserTable userList={adminUsers} title="Admin Users" />
+                        {/* Table 2: SA's Directly Managed Users */}
+                        <UserTable userList={managedUsersBySA} title="Directly Managed Users (CC/CA/CV)" />
+                    </>
+                ) : (
+                    <>
+                        {/* Table for Regular Admin */}
+                        <UserTable userList={users} title="Managed Users" />
+                    </>
+                )}
             </div>
         </div>
     );
-}
-
-// --- UPDATED ViewCircularPage ---
+}// --- UPDATED ViewCircularPage ---
 function ViewCircularPage({ circular, onBack, isPreview = false, availableSignatories = [] }) {
     if (!circular) { return <div className="text-center text-gray-500">Loading circular...</div>; }
 
@@ -1357,5 +1578,326 @@ function AdminReviewModal({ circular, onClose, onSubmit, isLoading }) {
     );
 }
 
+// --- NEW COMPONENT: AllUsersOverviewPage (Super Admin Only) ---
+function AllUsersOverviewPage({ allUsers = [], currentUser }) {
+    console.log("AllUsersOverviewPage: Rendering. Received users:", allUsers);
+
+    // Group users by their manager's ID (or 'unmanaged'/'admins')
+    const groupedUsers = useMemo(() => {
+        const groups = {
+            admins: [], // Store Admin users separately
+            directlyManagedBySA: [], // CC/CA/CV managed directly by SA
+            // Add keys for each Admin's ID
+        };
+
+        if (!allUsers || allUsers.length === 0) return groups;
+
+        allUsers.forEach(user => {
+            if (user.role === 'Admin') {
+                groups.admins.push(user);
+                // Create an empty array for this Admin's managed users if it doesn't exist
+                if (!groups[user._id]) {
+                    groups[user._id] = [];
+                }
+            } else if (user.managedBy?._id) {
+                const managerId = user.managedBy._id;
+                // Check if the manager is an Admin we already tracked
+                if (groups[managerId]) {
+                    groups[managerId].push(user);
+                } else if (managerId === currentUser.id) { // Check if managed directly by current SA
+                    groups.directlyManagedBySA.push(user);
+                } else {
+                    // User managed by someone unexpected? Log or handle.
+                    console.warn("User found with unexpected manager:", user);
+                }
+            } else if (user.role !== 'Super Admin' && user.role !== 'Admin') {
+                // Non-admin roles with NO manager are assumed directly managed by SA (legacy or direct creation)
+                groups.directlyManagedBySA.push(user);
+            }
+        });
+        console.log("Grouped Users:", groups);
+        return groups;
+    }, [allUsers, currentUser]);
+
+    const getRoleClass = (role) => {
+        switch (role) {
+            case 'Super Admin': return 'bg-red-100 text-red-800';
+            case 'Admin': return 'bg-purple-100 text-purple-800';
+            case 'Circular Creator': return 'bg-blue-100 text-blue-800';
+            case 'Circular Approver': return 'bg-yellow-100 text-yellow-800';
+            case 'Circular Viewer': return 'bg-green-100 text-green-800';
+            default: return 'bg-gray-100 text-gray-800';
+        }
+    };
+
+    const formatDate = (dateString) => {
+        if (!dateString) return 'N/A';
+        return new Date(dateString).toLocaleDateString();
+    }
+
+    return (
+        <div className="space-y-8">
+            <h2 className="text-3xl font-bold text-gray-800">All Users Overview</h2>
+
+            {/* Section for Admin Users */}
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+                <h3 className="text-xl font-semibold mb-4 text-gray-700">Admin Users ({groupedUsers.admins.length})</h3>
+                {groupedUsers.admins.length > 0 ? (
+                    <ul className="divide-y divide-gray-200">
+                        {groupedUsers.admins.map(admin => (
+                            <li key={admin._id} className="py-3">
+                                <p className="font-medium text-gray-900">{admin.name} <span className="text-sm text-gray-500">({admin.email})</span></p>
+                                <p className="text-sm text-gray-500">Created: {formatDate(admin.createdAt)}</p>
+                                {/* Link to view their managed users? */}
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="text-gray-500">No Admin users found.</p>
+                )}
+            </div>
+
+            {/* Section for Users Managed Directly by Super Admin */}
+            <div className="bg-white p-6 rounded-lg shadow-lg">
+                <h3 className="text-xl font-semibold mb-4 text-gray-700">Users Directly Managed by You ({groupedUsers.directlyManagedBySA.length})</h3>
+                {groupedUsers.directlyManagedBySA.length > 0 ? (
+                    <UserListTable users={groupedUsers.directlyManagedBySA} getRoleClass={getRoleClass} formatDate={formatDate} />
+                ) : (
+                    <p className="text-gray-500">No users directly managed by you.</p>
+                )}
+            </div>
+
+
+            {/* Sections for Users Managed by Each Admin */}
+            {groupedUsers.admins.map(admin => (
+                <div key={admin._id} className="bg-white p-6 rounded-lg shadow-lg">
+                    <h3 className="text-xl font-semibold mb-4 text-gray-700">Users Managed by {admin.name} ({groupedUsers[admin._id]?.length || 0})</h3>
+                    {groupedUsers[admin._id] && groupedUsers[admin._id].length > 0 ? (
+                        <UserListTable users={groupedUsers[admin._id]} getRoleClass={getRoleClass} formatDate={formatDate} />
+                    ) : (
+                        <p className="text-gray-500">No users managed by this Admin.</p>
+                    )}
+                </div>
+            ))}
+
+        </div>
+    );
+}
+
+// Helper component for the user list table in overview
+const UserListTable = ({ users, getRoleClass, formatDate }) => (
+    <div className="overflow-x-auto">
+        <table className="min-w-full bg-white">
+            <thead className="bg-gray-50">
+                <tr>
+                    <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
+                    <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                    <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                    <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created On</th>
+                </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+                {users.map(user => (
+                    <tr key={user._id} className="hover:bg-gray-50">
+                        <td className="py-3 px-4 font-medium text-gray-900">{user.name}</td>
+                        <td className="py-3 px-4 text-gray-500 text-sm">{user.email}</td>
+                        <td className="py-3 px-4">
+                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getRoleClass(user.role)}`}>
+                                {user.role}
+                            </span>
+                        </td>
+                        <td className="py-3 px-4 text-gray-500 text-sm">{formatDate(user.createdAt)}</td>
+                    </tr>
+                ))}
+            </tbody>
+        </table>
+    </div>
+);
+// --- NEW COMPONENT: AllCircularsOverviewPage (Super Admin Only) ---
+function AllCircularsOverviewPage({ allCirculars = [], onView, availableSignatories }) {
+    const [searchTerm, setSearchTerm] = useState('');
+    const [filterStatus, setFilterStatus] = useState('All');
+
+    const getStatusClass = (status) => { /* ... (copy from DashboardPage) ... */
+        switch (status) {
+            case 'Approved': case 'Published': return 'bg-green-100 text-green-800';
+            case 'Pending Admin': case 'Pending Super Admin': case 'Pending Higher Approval': return 'bg-yellow-100 text-yellow-800';
+            case 'Rejected': return 'bg-red-100 text-red-800';
+            default: return 'bg-gray-100 text-gray-800'; // Draft
+        }
+    };
+
+    const filteredCirculars = useMemo(() => {
+        return (allCirculars || [])
+            .filter(c => filterStatus === 'All' || c.status === filterStatus)
+            .filter(c =>
+                searchTerm === '' ||
+                c.subject?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                c.circularNumber?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                c.author?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                c.type?.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+    }, [allCirculars, searchTerm, filterStatus]);
+
+    const formatDate = (dateString) => { /* ... (copy from AllUsersOverviewPage) ... */
+        if (!dateString) return 'N/A';
+        return new Date(dateString).toLocaleDateString();
+    };
+
+    return (
+        <div className="bg-white p-6 rounded-lg shadow-lg space-y-6">
+            <h2 className="text-3xl font-bold text-gray-800">All Circulars Overview</h2>
+
+            {/* Search and Filter Controls */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input
+                    type="text"
+                    placeholder="Search by Subject, No., Author, Type..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="md:col-span-2 p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                />
+                <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="p-2 border rounded-md bg-white focus:ring-blue-500 focus:border-blue-500 shadow-sm"
+                >
+                    <option value="All">All Statuses</option>
+                    <option value="Draft">Draft</option>
+                    <option value="Pending Admin">Pending Admin</option>
+                    <option value="Pending Super Admin">Pending Super Admin</option>
+                    <option value="Pending Higher Approval">Pending Higher Approval</option>
+                    <option value="Approved">Approved</option>
+                    <option value="Rejected">Rejected</option>
+                    <option value="Published">Published</option>
+                </select>
+            </div>
+
+            {/* Circulars Table */}
+            <div className="overflow-x-auto">
+                <table className="min-w-full bg-white">
+                    <thead className="bg-gray-50">
+                        <tr>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Number</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Author</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Current Reviewer</th>
+                            {/* Add more columns if needed e.g., Approvers */}
+                            <th className="py-2 px-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {filteredCirculars.length > 0 ? filteredCirculars.map(c => (
+                            <tr key={c._id} className="hover:bg-gray-50">
+                                <td className="py-3 px-3 whitespace-nowrap text-sm text-gray-500">{formatDate(c.createdAt)}</td>
+                                <td className="py-3 px-3 text-sm text-gray-700">{c.type}</td>
+                                <td className="py-3 px-3 whitespace-nowrap text-sm font-mono text-gray-500">{c.circularNumber}</td>
+                                <td className="py-3 px-3 font-medium text-gray-900">{c.subject}</td>
+                                <td className="py-3 px-3 text-sm text-gray-600">{c.author?.name || 'N/A'}</td>
+                                <td className="py-3 px-3">
+                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(c.status)}`}>
+                                        {c.status}
+                                    </span>
+                                </td>
+                                <td className="py-3 px-3 text-sm text-gray-600">
+                                    {/* Show who it's pending with */}
+                                    {(c.status === 'Pending Admin' || c.status === 'Pending Super Admin') && (c.submittedTo?.name || 'N/A')}
+                                    {c.status === 'Pending Higher Approval' && `CA (${c.approvers?.length || 0})`}
+                                </td>
+                                <td className="py-3 px-3 whitespace-nowrap text-sm">
+                                    <button onClick={() => onView(c)} className="text-blue-600 hover:text-blue-900">View Details</button>
+                                    {/* Add other SA-specific actions if needed, e.g., force delete */}
+                                </td>
+                            </tr>
+                        )) : (
+                            <tr>
+                                <td colSpan="8" className="text-center py-10 text-gray-500">No circulars match your filters.</td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    );
+}
+// --- CORRECTED SidebarMenu Component ---
+function SidebarMenu({ isOpen, onClose, setPage, currentUser }) {
+    // --- ADDED SAFETY CHECK ---
+    // If currentUser is null or undefined, don't render anything inside
+    if (!currentUser) {
+        // Optionally, you could return a minimal version or just null
+        return null;
+    }
+    // --- END SAFETY CHECK ---
+
+
+    const navItemBase = "flex items-center w-full py-3 px-4 rounded-lg text-base font-medium transition-colors duration-200";
+    const linkClass = "text-gray-700 hover:bg-gray-200 hover:text-gray-900";
+
+    // Function to handle link click and close sidebar
+    const handleNavigate = (pageName) => {
+        setPage(pageName);
+        onClose(); // Close sidebar after navigation
+    };
+
+    return (
+        <>
+            {/* Overlay */}
+            <div
+                className={`fixed inset-0 bg-black bg-opacity-50 z-40 transition-opacity duration-300 ease-in-out ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                onClick={onClose}
+                aria-hidden="true"
+            />
+
+            {/* Sidebar Panel */}
+            <div
+                className={`fixed top-0 left-0 h-full w-72 bg-white shadow-xl z-50 transform transition-transform duration-300 ease-in-out ${isOpen ? 'translate-x-0' : '-translate-x-full'}`} // Corrected for left slide-in
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="sidebar-title"
+            >
+                <div className="flex justify-between items-center p-4 border-b">
+                    <h2 id="sidebar-title" className="text-lg font-semibold text-gray-800">Menu</h2>
+                    <button
+                        onClick={onClose}
+                        className="p-1 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        aria-label="Close menu"
+                    >
+                        <IconClose />
+                    </button>
+                </div>
+
+                {/* Navigation Links - Now safe because we checked currentUser above */}
+                <nav className="p-4 space-y-2">
+                    {/* Links visible to all logged-in users */}
+                    <button onClick={() => handleNavigate('dashboard')} className={`${navItemBase} ${linkClass}`}><IconDashboard /> Dashboard</button>
+
+                    {/* New Circular visible to SA, Admin, and CC */}
+                    {(currentUser.role === 'Super Admin' || currentUser.role === 'Admin' || currentUser.role === 'Circular Creator') && (
+                        <button onClick={() => handleNavigate('create')} className={`${navItemBase} ${linkClass}`}><IconNewCircular /> New Circular</button>
+                    )}
+
+                    {/* Manage Users visible to SA and Admin */}
+                    {(currentUser.role === 'Super Admin' || currentUser.role === 'Admin') && (
+                        <button onClick={() => handleNavigate('manageUsers')} className={`${navItemBase} ${linkClass}`}><IconManageUsers /> Manage Users</button>
+                    )}
+
+                    {/* Signatories, All Users, All Circulars visible only to SA */}
+                    {currentUser.role === 'Super Admin' && (
+                        <>
+                            <button onClick={() => handleNavigate('manageSignatories')} className={`${navItemBase} ${linkClass}`}><IconSignatories /> Signatories</button>
+                            <button onClick={() => handleNavigate('allUsersOverview')} className={`${navItemBase} ${linkClass}`}><IconManageUsers /> All Users</button>
+                            <button onClick={() => handleNavigate('allCircularsOverview')} className={`${navItemBase} ${linkClass}`}><IconDashboard /> All Circulars</button>
+                        </>
+                    )}
+                </nav>
+            </div>
+        </>
+    );
+}
+// --- END SidebarMenu ---
 export default App;
 

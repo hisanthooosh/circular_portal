@@ -12,12 +12,30 @@ const isSuperAdmin = (req, res, next) => {
     next();
 };
 
+// --- REPLACE the existing isAdminOrSuperAdmin function with this ---
 const isAdminOrSuperAdmin = (req, res, next) => {
-    if (!req.user || (req.user.role !== 'Admin' && req.user.role !== 'Super Admin')) {
+    console.log("--- isAdminOrSuperAdmin middleware ---"); // Log entry point
+
+    // Check 1: Did authMiddleware run and set req.user?
+    if (!req.user) {
+        console.log("isAdminOrSuperAdmin: FAILED - req.user is undefined. Authentication might have failed or middleware order is wrong.");
+        // If authMiddleware failed, it should have sent 401. This case indicates a potential setup issue.
+        return res.status(500).json({ message: 'Middleware configuration error.' });
+    }
+
+    const userRole = req.user.role;
+    console.log(`isAdminOrSuperAdmin: Checking user info passed from authMiddleware: ID=${req.user.id}, Role=${userRole}`); // Log user info
+
+    // Check 2: Is the role allowed?
+    if (userRole === 'Admin' || userRole === 'Super Admin') {
+        console.log(`isAdminOrSuperAdmin: Access GRANTED for role "${userRole}". Calling next().`);
+        next(); // Allow access
+    } else {
+        console.log(`isAdminOrSuperAdmin: Access DENIED. Role "${userRole}" is not Admin or Super Admin.`);
         return res.status(403).json({ message: 'Access denied. Admin or Super Admin role required.' });
     }
-    next();
 };
+// --- END REPLACEMENT ---
 
 // @route   POST api/users
 // @desc    Create a new user (Super Admin creates Admins/Others, Admin creates CC/CV)
@@ -41,10 +59,10 @@ router.post('/', [authMiddleware, isAdminOrSuperAdmin], async (req, res) => {
         // Determine the manager (managedBy)
         let managerId = null;
         if (role === 'Circular Creator' || role === 'Circular Viewer') {
-             // If created by Admin or SA, set them as manager
-             if (loggedInUser.role === 'Admin' || loggedInUser.role === 'Super Admin'){
-                 managerId = loggedInUser.id;
-             }
+            // If created by Admin or SA, set them as manager
+            if (loggedInUser.role === 'Admin' || loggedInUser.role === 'Super Admin') {
+                managerId = loggedInUser.id;
+            }
         }
         // Note: Super Admin creating an Admin - managerId remains null
 
@@ -73,28 +91,47 @@ router.post('/', [authMiddleware, isAdminOrSuperAdmin], async (req, res) => {
     }
 });
 // @route   GET api/users
-// @desc    Get users (Super Admin sees all, Admin sees their managed users)
+// @desc    Get users (Super Admin sees ALL, Admin sees ONLY their managed users)
 // @access  Private (Admin or Super Admin)
 router.get('/', [authMiddleware, isAdminOrSuperAdmin], async (req, res) => {
+    console.log("--- GET /api/users ---"); // Simplified log message
     try {
-        let query = {};
-        if (req.user.role === 'Admin') {
-            // Admin only sees users they manage
-            query = { managedBy: req.user.id };
-        }
-        // Super Admin sees all (empty query)
+        const loggedInUserId = req.user.id;
+        const loggedInUserRole = req.user.role;
 
-        // Find users based on the query, exclude passwords
-        const users = await User.find(query).select('-password').populate('managedBy', 'name email'); // Populate manager info
+        let query = {}; // Default: empty query (gets all users)
+
+        console.log(`Fetching users for: ID=${loggedInUserId}, Role=${loggedInUserRole}`);
+
+        // --- Apply filter ONLY if the logged-in user is an Admin ---
+        if (loggedInUserRole === 'Admin') {
+            // Admin sees ONLY users they directly manage
+            query = { managedBy: loggedInUserId };
+            console.log("Applying Admin filter:", JSON.stringify(query));
+        } else if (loggedInUserRole === 'Super Admin') {
+            // Super Admin uses the default empty query to get ALL users
+            console.log("Applying Super Admin filter (no filter - get all):", JSON.stringify(query));
+        }
+        // --- End Filter Logic ---
+
+        // Find users based on the query, exclude passwords, populate manager info
+        const users = await User.find(query)
+            .select('-password')
+            .populate('managedBy', 'name email') // Populate manager info
+            .sort({ role: 1, name: 1 }); // Sort by role, then name
+
+        console.log(`Found ${users.length} users with query for role ${loggedInUserRole}.`);
+
         res.json(users);
     } catch (err) {
-        console.error("Error fetching users:", err.message);
+        console.error("Error fetching users:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error fetching users' });
     }
+    console.log("--- END GET /api/users ---");
 });
-// @route   DELETE api/users/:id
-// @desc    Delete a user (Super Admin deletes anyone, Admin deletes their managed users)
-// @access  Private (Admin or Super Admin)
+
+
+
 router.delete('/:id', [authMiddleware, isAdminOrSuperAdmin], async (req, res) => {
     try {
         const userToDelete = await User.findById(req.params.id);
@@ -106,7 +143,7 @@ router.delete('/:id', [authMiddleware, isAdminOrSuperAdmin], async (req, res) =>
 
         // Prevent deleting oneself
         if (userToDelete.id === loggedInUser.id) {
-             return res.status(400).json({ message: 'You cannot delete your own account.' });
+            return res.status(400).json({ message: 'You cannot delete your own account.' });
         }
 
         // Check permissions
@@ -132,5 +169,29 @@ router.delete('/:id', [authMiddleware, isAdminOrSuperAdmin], async (req, res) =>
         res.status(500).json({ message: 'Server Error deleting user' });
     }
 });
+
+// --- NEW ROUTE for Super Admin All Users View ---
+// @route   GET api/users/all
+// @desc    Get ALL users in the system
+// @access  Private (Super Admin ONLY)
+router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses isSuperAdmin middleware
+    console.log("--- GET /api/users/all (SA Overview) ---");
+    try {
+        // Find ALL users, exclude passwords, populate manager info
+        const allUsers = await User.find({}) // Empty query {} fetches all
+            .select('-password')
+            .populate('managedBy', 'name email') // Populate manager details
+            .sort({ role: 1, name: 1 }); // Sort by role, then name
+
+        console.log(`Found ${allUsers.length} total users for SA overview.`);
+
+        res.json(allUsers);
+    } catch (err) {
+        console.error("Error fetching all users:", err.message, err.stack);
+        res.status(500).json({ message: 'Server Error fetching all users' });
+    }
+    console.log("--- END GET /api/users/all (SA Overview) ---");
+});
+// --- END NEW ROUTE ---
 module.exports = router;
 

@@ -483,6 +483,32 @@ router.delete('/:id', authMiddleware, async (req, res) => {
     }
 });
 
+// --- NEW ROUTE for Super Admin All Circulars View ---
+// @route   GET api/circulars/all
+// @desc    Get ALL circulars with detailed population for SA overview
+// @access  Private (Super Admin ONLY)
+router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses isSuperAdmin middleware
+    console.log("--- GET /api/circulars/all (SA Overview) ---");
+    try {
+        // Find ALL circulars
+        const allCirculars = await Circular.find({}) // Empty query {} fetches all
+            .populate('author', 'name email') // Get author details
+            .populate('submittedTo', 'name email') // Get details of Admin/SA it's pending with
+            .populate('signatories.authority', 'name position') // Get signatory details
+            .populate('approvers.user', 'name email') // Get higher approver details
+            .sort({ createdAt: -1 }); // Sort by creation date, newest first
+
+        console.log(`Found ${allCirculars.length} total circulars for SA overview.`);
+
+        res.json(allCirculars);
+    } catch (err) {
+        console.error("Error fetching all circulars:", err.message, err.stack);
+        res.status(500).json({ message: 'Server Error fetching all circulars' });
+    }
+    console.log("--- END GET /api/circulars/all (SA Overview) ---");
+});
+// --- END NEW ROUTE ---
+
 
 module.exports = router; // Ensure this is at the very end
 
