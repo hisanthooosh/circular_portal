@@ -945,7 +945,7 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
                         <label className="block font-bold mb-2">Decision</label>
                         <select value={decision} onChange={(e) => setDecision(e.target.value)} className="w-full p-2 border rounded-md bg-white">
                             <option>Approve</option>
-                            <option>Reject</option>
+                            <option>Reject.</option>
                         </select>
                     </div>
                     {decision === 'Reject' && (
