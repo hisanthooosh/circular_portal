@@ -1,3 +1,5 @@
+
+
 const express = require('express');
 const router = express.Router(); // Ensure this line is present at the top
 const Circular = require('../models/Circular');
@@ -5,9 +7,11 @@ const User = require('../models/User');
 const authMiddleware = require('../middleware/auth');
 
 // --- Middleware for Role Checking ---
+
+// UPDATED: Added 'Admin' role
 const isCreatorOrAdmin = (req, res, next) => {
-    if (!req.user || (req.user.role !== 'Super Admin' && req.user.role !== 'Circular Creator')) {
-        return res.status(403).json({ message: 'Access denied. Creator or Super Admin role required.' });
+    if (!req.user || (req.user.role !== 'Super Admin' && req.user.role !== 'Circular Creator' && req.user.role !== 'Admin')) {
+        return res.status(403).json({ message: 'Access denied. Creator, Admin, or Super Admin role required.' });
     }
     next();
 };
@@ -36,101 +40,10 @@ const isSuperAdminOrApprover = (req, res, next) => {
 
 // @route   POST api/circulars
 // @desc    Create a new circular (as a Draft)
-// @access  Private (Creator or Super Admin)
-router.post('/', [authMiddleware, isCreatorOrAdmin], async (req, res) => {
-    // Destructure new fields from request body
-    const {
-        type,
-        subject,
-        body,
-        circularNumber,
-        date,
-        signatories, // Expecting an array like [{ authority: 'id', order: 1 }, ...]
-        agendaPoints,
-        copyTo
-    } = req.body;
-
+// @access  Private (Creator, Admin, or Super Admin)
+router.post('/', [authMiddleware, isCreatorOrAdmin], async (req, res) => { // Uses corrected middleware
+    const { type, subject, body, circularNumber, date, signatories, agendaPoints, copyTo } = req.body;
     try {
-        // Basic validation
-        if (!type || !subject || !body || !circularNumber || !date || !signatories || signatories.length === 0) {
-            return res.status(400).json({ message: 'Missing required circular fields.' });
-        }
-
-        // Ensure signatories have authority and order
-        if (!signatories.every(s => s.authority && typeof s.order === 'number')) { // Check order is a number too
-            return res.status(400).json({ message: 'Each signatory must have an authority ID and a valid order number.' });
-        }
-
-        const newCircular = new Circular({
-            type,
-            subject,
-            body,
-            circularNumber,
-            date,
-            signatories, // Save the array directly
-            agendaPoints: agendaPoints || [], // Handle optional fields
-            copyTo: copyTo || [], // Handle optional fields
-            author: req.user.id,
-            status: 'Draft',
-        });
-
-        const savedCircular = await newCircular.save();
-
-        // Populate signatory details before sending back
-        const populatedCircular = await Circular.findById(savedCircular._id)
-            .populate('signatories.authority', 'name position')
-            .populate('author', 'name email'); // Populate author too
-
-        res.status(201).json(populatedCircular);
-    } catch (err) {
-        console.error("Error creating circular:", err.message);
-        // Provide more specific error if possible (e.g., validation error)
-        if (err.name === 'ValidationError') {
-            return res.status(400).json({ message: err.message });
-        }
-        res.status(500).json({ message: 'Server Error creating circular' });
-    }
-});
-
-// --- NEW ROUTE for Updating Circulars ---
-// @route   PATCH api/circulars/:id
-// @desc    Update an existing circular (Draft or Rejected only)
-// @access  Private (Author or Super Admin)
-router.patch('/:id', authMiddleware, async (req, res) => {
-    // Destructure the fields that can be updated from the request body
-    const {
-        type,
-        subject,
-        body,
-        circularNumber,
-        date,
-        signatories,
-        agendaPoints,
-        copyTo
-    } = req.body;
-    const circularId = req.params.id;
-    const userId = req.user.id;
-    const userRole = req.user.role;
-
-    try {
-        // Find the existing circular
-        let circular = await Circular.findById(circularId);
-        if (!circular) {
-            return res.status(404).json({ message: 'Circular not found' });
-        }
-
-        // --- Permission Check ---
-        const isAuthor = circular.author.toString() === userId;
-        const canEditStatus = circular.status === 'Draft' || circular.status === 'Rejected';
-
-        // Allow update only if:
-        // 1. User is Super Admin OR
-        // 2. User is the Author AND status is Draft/Rejected
-        if (userRole !== 'Super Admin' && !(isAuthor && canEditStatus)) {
-            return res.status(403).json({ message: `Permission denied. Cannot edit circular with status '${circular.status}'.` });
-        }
-
-        // --- Validation (Similar to Create) ---
         if (!type || !subject || !body || !circularNumber || !date || !signatories || signatories.length === 0) {
             return res.status(400).json({ message: 'Missing required circular fields.' });
         }
@@ -138,7 +51,53 @@ router.patch('/:id', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: 'Each signatory must have an authority ID and a valid order number.' });
         }
 
-        // --- Update the Fields ---
+        const newCircular = new Circular({
+            type, subject, body, circularNumber, date, signatories,
+            agendaPoints: agendaPoints || [],
+            copyTo: copyTo || [],
+            author: req.user.id,
+            status: 'Draft', // Always start as Draft
+        });
+
+        const savedCircular = await newCircular.save();
+        const populatedCircular = await Circular.findById(savedCircular._id)
+            .populate('signatories.authority', 'name position')
+            .populate('author', 'name email');
+        res.status(201).json(populatedCircular);
+    } catch (err) {
+        console.error("Error creating circular:", err.message);
+        if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
+        res.status(500).json({ message: 'Server Error creating circular' });
+    }
+});
+
+// @route   PATCH api/circulars/:id
+// @desc    Update an existing circular (Draft or Rejected only)
+// @access  Private (Author or Super Admin)
+router.patch('/:id', authMiddleware, async (req, res) => {
+    const { type, subject, body, circularNumber, date, signatories, agendaPoints, copyTo } = req.body;
+    const circularId = req.params.id;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    try {
+        let circular = await Circular.findById(circularId);
+        if (!circular) return res.status(404).json({ message: 'Circular not found' });
+
+        const isAuthor = circular.author.toString() === userId;
+        const canEditStatus = circular.status === 'Draft' || circular.status === 'Rejected';
+
+        if (userRole !== 'Super Admin' && !(isAuthor && canEditStatus)) {
+            return res.status(403).json({ message: `Permission denied. Cannot edit circular with status '${circular.status}'.` });
+        }
+
+        if (!type || !subject || !body || !circularNumber || !date || !signatories || signatories.length === 0) {
+            return res.status(400).json({ message: 'Missing required circular fields.' });
+        }
+        if (!signatories.every(s => s.authority && typeof s.order === 'number')) {
+            return res.status(400).json({ message: 'Each signatory must have an authority ID and a valid order number.' });
+        }
+
         circular.type = type;
         circular.subject = subject;
         circular.body = body;
@@ -147,198 +106,232 @@ router.patch('/:id', authMiddleware, async (req, res) => {
         circular.signatories = signatories;
         circular.agendaPoints = agendaPoints || [];
         circular.copyTo = copyTo || [];
-        // When editing, reset status to Draft? Or keep Rejected if it was Rejected?
-        // Let's keep it simple: if edited, it becomes a Draft again.
-        circular.status = 'Draft';
-        circular.rejectionReason = undefined; // Clear rejection reason upon edit
-        circular.submittedTo = undefined; // Clear who it was submitted to
-        circular.approvers = []; // Clear higher approvers
+        circular.status = 'Draft'; // Reset status to Draft after edit
+        circular.rejectionReason = undefined;
+        circular.submittedTo = undefined;
+        circular.approvers = [];
 
         const updatedCircular = await circular.save();
-
-        // Populate details before sending back
         const populatedCircular = await Circular.findById(updatedCircular._id)
             .populate('author', 'name email')
             .populate('signatories.authority', 'name position');
-
-        res.json(populatedCircular); // Send back the updated circular
-
+        res.json(populatedCircular);
     } catch (err) {
         console.error("Error updating circular:", err.message, err.stack);
-        if (err.name === 'ValidationError') {
-            return res.status(400).json({ message: err.message });
-        }
+        if (err.name === 'ValidationError') return res.status(400).json({ message: err.message });
         res.status(500).json({ message: 'Server Error updating circular' });
     }
 });
-// --- END NEW UPDATE ROUTE ---
 
 // @route   GET api/circulars
-// @desc    Get circulars based on user role
+// @desc    Get circulars based on user role and management hierarchy
 // @access  Private
 router.get('/', authMiddleware, async (req, res) => {
+    console.log("--- GET /api/circulars (Role-Based View) ---");
     try {
-        let query = {};
         const userId = req.user.id;
         const userRole = req.user.role;
+        let query = {};
+        let sort = { createdAt: -1 };
+
+        console.log(`Fetching circulars for User ID: ${userId}, Role: ${userRole}`);
 
         if (userRole === 'Circular Creator') {
             query = { author: userId };
+            console.log("Applying CC filter:", JSON.stringify(query));
+        } else if (userRole === 'Admin') {
+            // Replaced .distinct() with .find() and .map() to avoid API version error
+            const managedUsers = await User.find({ managedBy: userId }).select('_id');
+            const managedUserIds = managedUsers.map(user => user._id);
+            query = {
+                $or: [
+                    { status: 'Pending Admin', submittedTo: userId },
+                    { author: userId },
+                    { author: { $in: managedUserIds } }
+                ]
+            };
+            console.log("Applying Admin filter:", JSON.stringify(query));
+        } else if (userRole === 'Super Admin') {
+            query = {}; // SA sees all on main dashboard
+            console.log("Applying Super Admin filter (no filter - get all)");
         } else if (userRole === 'Circular Approver') {
-            query = { 'approvers.user': userId }; // Fetch ALL circulars assigned to this approver
+            query = { status: 'Pending Higher Approval', 'approvers.user': userId };
+            console.log("Applying CA filter:", JSON.stringify(query));
         } else if (userRole === 'Circular Viewer') {
-            query = { status: 'Published' }; // Assuming 'Published' status exists
-        } else if (userRole !== 'Super Admin') {
-            // For any other unexpected role, show nothing or handle error
+            query = { status: 'Published' };
+            sort = { publishedAt: -1 };
+            console.log("Applying CV filter:", JSON.stringify(query));
+        } else {
             console.warn(`Unexpected role accessing GET /circulars: ${userRole}`);
-            return res.json([]); // Return empty array safely
+            return res.json([]);
         }
-        // Super Admin gets everything (empty query)
 
         const circulars = await Circular.find(query)
-            .populate('author', 'name email') // Get author details
-            .populate('signatories.authority', 'name position') // Get signatory details
-            .populate('approvers.user', 'name email') // Get approver details
-            .sort({ createdAt: -1 }); // Sort by creation date, newest first
+            .populate('author', 'name email')
+            .populate('submittedTo', 'name email')
+            .populate('signatories.authority', 'name position')
+            .populate('approvers.user', 'name email')
+            .sort(sort);
 
+        console.log(`Found ${circulars ? circulars.length : 'null'} circulars matching query for role ${userRole}.`);
         res.json(circulars);
+
     } catch (err) {
-        console.error("Error fetching circulars:", err.message);
+        console.error("Error fetching circulars:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error fetching circulars' });
     }
+    console.log("--- END GET /api/circulars ---");
 });
 
 // @route   PATCH api/circulars/submit/:id
 // @desc    Submit a draft circular for approval
-// @access  Private (Creator or Super Admin who authored it)
+// @access  Private (Author)
 router.patch('/submit/:id', authMiddleware, async (req, res) => {
+    console.log(`--- PATCH /submit/${req.params.id} ---`); // Log route entry
     try {
         const circular = await Circular.findById(req.params.id);
         if (!circular) return res.status(404).json({ message: 'Circular not found' });
 
-        // Check authorization (Author or SA can submit?) - Keep author only for now
-        if (circular.author.toString() !== req.user.id) { // Only author can submit their own draft
+        // 1. Check permissions
+        if (circular.author.toString() !== req.user.id && req.user.role !== 'Super Admin') {
             return res.status(403).json({ message: 'User not authorized' });
         }
         if (circular.status !== 'Draft' && circular.status !== 'Rejected') {
             return res.status(400).json({ message: 'Only Draft or Rejected circulars can be submitted' });
         }
 
-        // --- NEW: Find the manager ---
-        const authorDetails = await User.findById(req.user.id).select('managedBy');
-        if (!authorDetails || !authorDetails.managedBy) {
-            // If CC has no manager (maybe managed by SA?), submit directly to SA
-            const superAdmin = await User.findOne({ role: 'Super Admin' });
-            if (!superAdmin) {
-                return res.status(500).json({ message: 'System Error: Cannot find manager or Super Admin to submit to.' });
-            }
-            circular.status = 'Pending Super Admin';
-            circular.submittedTo = superAdmin._id;
-            console.log(`Circular ${circular._id} submitted directly to Super Admin ${superAdmin._id} as author has no manager.`);
+        // 2. Get author's details, including their manager's role
+        const author = await User.findById(circular.author).populate('managedBy');
+        if (!author) return res.status(404).json({ message: 'Author user not found' });
 
-        } else {
-            // Submit to the author's manager (Admin)
-            circular.status = 'Pending Admin';
-            circular.submittedTo = authorDetails.managedBy;
-            console.log(`Circular ${circular._id} submitted to Admin ${authorDetails.managedBy}`);
+        // Find the Super Admin's ID (we always need this)
+        const superAdmin = await User.findOne({ role: 'Super Admin' }).select('_id');
+        if (!superAdmin) {
+            console.error("CRITICAL: No Super Admin found during submit.");
+            return res.status(500).json({ message: 'System Error: Cannot find Super Admin.' });
         }
-        // --- END NEW ---
 
-        circular.rejectionReason = undefined; // Clear rejection reason on resubmission
-        const updatedCircular = await circular.save();
+        // 3. Apply routing logic based on author's role
+        if (author.role === 'Circular Creator') {
+            const manager = author.managedBy; // This is the populated manager object
+            if (manager) {
+                if (manager.role === 'Admin') {
+                    // Submit to Admin
+                    circular.status = 'Pending Admin';
+                    circular.submittedTo = manager._id; // Assign to the Admin
+                    console.log(`Submit: CC ${author._id} submitting to Admin ${manager._id}`);
+                } else if (manager.role === 'Super Admin') {
+                    // Submit to Super Admin (if SA is manager)
+                    circular.status = 'Pending Super Admin';
+                    circular.submittedTo = manager._id; // Assign to the SA
+                    console.log(`Submit: CC ${author._id} submitting to Manager (SA) ${manager._id}`);
+                } else {
+                    // Manager has weird role? Default to SA.
+                    console.warn(`Submit: CC ${author._id} has manager with invalid role (${manager.role}). Submitting to SA.`);
+                    circular.status = 'Pending Super Admin';
+                    circular.submittedTo = superAdmin._id;
+                }
+            } else {
+                // CC has no manager (legacy or direct SA creation)
+                console.log(`Submit: CC ${author._id} has no manager. Submitting to SA ${superAdmin._id}.`);
+                circular.status = 'Pending Super Admin';
+                circular.submittedTo = superAdmin._id; // Assign to SA
+            }
+        } else if (author.role === 'Admin' || author.role === 'Super Admin') {
+            // Admins and Super Admins submit their own circulars directly to the Super Admin
+            console.log(`Submit: ${author.role} ${author._id} submitting their own circular. Submitting to SA ${superAdmin._id}.`);
+            circular.status = 'Pending Super Admin';
+            circular.submittedTo = superAdmin._id; // Assign to SA
+        } else {
+            // Should not happen
+            console.error(`Submit: User with role ${author.role} attempted to submit.`);
+            return res.status(403).json({ message: 'Your role does not have permission to submit circulars.' });
+        }
+        // --- END NEW LOGIC ---
+
+        circular.rejectionReason = undefined; // Clear rejection reason
+
+        const updatedCircular = await circular.save(); // Save the changes
+
+        console.log(`Submit: Saved circular ${updatedCircular._id} with status '${updatedCircular.status}' and submittedTo '${updatedCircular.submittedTo}'`);
+
         // Populate details before sending back
         const populatedCircular = await Circular.findById(updatedCircular._id)
             .populate('author', 'name email')
             .populate('signatories.authority', 'name position')
-            .populate('submittedTo', 'name email'); // Also populate submittedTo
+            .populate('submittedTo', 'name email');
+
         res.json(populatedCircular);
     } catch (err) {
-        console.error("Error submitting circular:", err.message);
+        console.error("Error submitting circular:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error submitting circular' });
     }
 });
-// --- NEW ROUTE for Admin Review ---
 // @route   PATCH api/circulars/admin-review/:id
 // @desc    Admin reviews a circular (Forward to Super Admin or Reject)
 // @access  Private (Admin)
 router.patch('/admin-review/:id', [authMiddleware, isAdmin], async (req, res) => {
-    const { decision, rejectionReason } = req.body; // 'Forward' or 'Reject'
+    const { decision, rejectionReason } = req.body;
     const adminUserId = req.user.id;
-
     try {
         const circular = await Circular.findById(req.params.id);
         if (!circular) return res.status(404).json({ message: 'Circular not found' });
-
-        // Validation: Correct status and assigned Admin
         if (circular.status !== 'Pending Admin') {
             return res.status(400).json({ message: 'Circular is not pending review by Admin.' });
         }
-        // Ensure submittedTo exists before calling toString()
         if (!circular.submittedTo || circular.submittedTo.toString() !== adminUserId) {
             return res.status(403).json({ message: 'You are not assigned to review this circular.' });
         }
 
-        circular.rejectionReason = undefined; // Clear previous reason
+        circular.rejectionReason = undefined;
 
         if (decision === 'Reject') {
             circular.status = 'Rejected';
             circular.rejectionReason = rejectionReason || 'No reason provided by Admin.';
-            circular.submittedTo = undefined; // No longer submitted to anyone
-            circular.approvers = []; // Clear any higher approvers if rejected now
-
+            circular.submittedTo = undefined;
+            circular.approvers = [];
         } else if (decision === 'Forward') {
-            // Find the Super Admin (Assuming only one for now)
-            // It's better practice to fetch the Super Admin dynamically
-            const superAdmin = await User.findOne({ role: 'Super Admin' }).select('_id'); // Only select the ID
+            const superAdmin = await User.findOne({ role: 'Super Admin' }).select('_id');
             if (!superAdmin) {
-                // Log the error for server admins
                 console.error("CRITICAL: Super Admin account not found during Admin review.");
                 return res.status(500).json({ message: 'System configuration error: Cannot find Super Admin.' });
             }
-
             circular.status = 'Pending Super Admin';
-            circular.submittedTo = superAdmin._id; // Assign to the Super Admin's ID
-
+            circular.submittedTo = superAdmin._id;
         } else {
             return res.status(400).json({ message: 'Invalid decision provided. Must be "Forward" or "Reject".' });
         }
 
         const updatedCircular = await circular.save();
-
-        // Populate details before sending back
         const populatedCircular = await Circular.findById(updatedCircular._id)
             .populate('author', 'name email')
             .populate('signatories.authority', 'name position')
-            .populate('submittedTo', 'name email'); // Populate the new submittedTo user
-
+            .populate('submittedTo', 'name email');
         res.json(populatedCircular);
-
     } catch (err) {
-        console.error("Error during Admin review:", err.message, err.stack); // Log stack too
+        console.error("Error during Admin review:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error during Admin review' });
     }
 });
-// --- END NEW ROUTE ---
 
 // @route   PATCH api/circulars/review/:id
 // @desc    Super Admin reviews a circular (Approve, Reject, or Send Higher)
 // @access  Private (Super Admin)
 router.patch('/review/:id', [authMiddleware, isSuperAdmin], async (req, res) => {
     const { decision, rejectionReason, higherApproverIds } = req.body;
-
     try {
         const circular = await Circular.findById(req.params.id);
         if (!circular) return res.status(404).json({ message: 'Circular not found' });
         if (circular.status !== 'Pending Super Admin') {
-            return res.status(400).json({ message: 'Circular is not pending review by Super Admin' });
+            return res.status(400).json({ message: 'Circular is not pending review by Super Admin.' });
         }
 
-        circular.rejectionReason = undefined; // Clear previous rejection reason
+        circular.rejectionReason = undefined;
 
         if (decision === 'Reject') {
             circular.status = 'Rejected';
             circular.rejectionReason = rejectionReason || 'No reason provided by Super Admin.';
-            circular.approvers = []; // Clear any potential approvers if rejected now
+            circular.approvers = [];
         } else if (decision === 'Approve') {
             if (higherApproverIds && higherApproverIds.length > 0) {
                 const approverUsers = await User.find({ _id: { $in: higherApproverIds }, role: 'Circular Approver' });
@@ -349,14 +342,13 @@ router.patch('/review/:id', [authMiddleware, isSuperAdmin], async (req, res) => 
                 circular.approvers = higherApproverIds.map(id => ({ user: id, decision: 'Pending', feedback: '' }));
             } else {
                 circular.status = 'Approved';
-                circular.approvers = []; // No higher approval needed
+                circular.approvers = [];
             }
         } else {
             return res.status(400).json({ message: 'Invalid decision provided.' });
         }
 
         const updatedCircular = await circular.save();
-        // Populate details before sending back
         const populatedCircular = await Circular.findById(updatedCircular._id)
             .populate('author', 'name email')
             .populate('signatories.authority', 'name position')
@@ -370,12 +362,10 @@ router.patch('/review/:id', [authMiddleware, isSuperAdmin], async (req, res) => 
 
 // @route   PATCH api/circulars/higher-review/:id
 // @desc    Circular Approver submits their decision
-// @access  Private (Approver assigned to this circular)
+// @access  Private (Approver assigned)
 router.patch('/higher-review/:id', authMiddleware, async (req, res) => {
-    const { decision, feedback } = req.body; // 'Approved', 'Rejected', 'Request Meeting'
+    const { decision, feedback } = req.body;
     const approverUserId = req.user.id;
-    const userRole = req.user.role;
-
     try {
         const circular = await Circular.findById(req.params.id);
         if (!circular) return res.status(404).json({ message: 'Circular not found' });
@@ -383,55 +373,68 @@ router.patch('/higher-review/:id', authMiddleware, async (req, res) => {
             return res.status(400).json({ message: 'Circular is not pending higher approval.' });
         }
 
-        // Find the specific approver entry for the current user
         const approverEntry = circular.approvers.find(appr => appr.user.toString() === approverUserId);
 
-        // Only assigned approvers can review
         if (!approverEntry) {
             return res.status(403).json({ message: 'You are not assigned to approve this circular.' });
         }
         if (approverEntry.decision !== 'Pending') {
-            return res.status(400).json({ message: 'You have already submitted your decision for this circular.' });
+            return res.status(400).json({ message: 'You have already submitted your decision.' });
         }
-        if (!['Approved', 'Rejected', 'Request Meeting'].includes(decision)) {
+        if (!['Approved', 'Rejected'].includes(decision)) { // Removed 'Request Meeting'
             return res.status(400).json({ message: 'Invalid decision submitted.' });
         }
 
-
-        // Update the decision and feedback
         approverEntry.decision = decision;
         approverEntry.feedback = feedback || '';
 
-        // Check if all approvers have made a decision
         const allDecided = circular.approvers.every(appr => appr.decision !== 'Pending');
 
         if (allDecided) {
             const rejected = circular.approvers.some(appr => appr.decision === 'Rejected');
-            const meetingRequested = circular.approvers.some(appr => appr.decision === 'Request Meeting');
-
             if (rejected) {
                 circular.status = 'Rejected';
                 circular.rejectionReason = circular.approvers.find(appr => appr.decision === 'Rejected')?.feedback || 'Rejected by higher authority.';
-            } else if (meetingRequested) {
-                circular.status = 'Pending Higher Approval'; // Keep status, maybe add flag later
-                console.log(`Meeting requested for circular ${circular._id}`);
             } else {
-                circular.status = 'Approved'; // All approved
+                circular.status = 'Approved';
             }
         }
-        // If not all decided, status remains 'Pending Higher Approval'
 
         const updatedCircular = await circular.save();
-        // Populate details before sending back
         const populatedCircular = await Circular.findById(updatedCircular._id)
             .populate('author', 'name email')
             .populate('signatories.authority', 'name position')
             .populate('approvers.user', 'name email');
         res.json(populatedCircular);
-
     } catch (err) {
-        console.error("Error during higher review:", err.message);
+        console.error("Error during higher review:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error during higher review' });
+    }
+});
+
+// @route   PATCH api/circulars/publish/:id
+// @desc    Publish an Approved circular
+// @access  Private (Super Admin)
+router.patch('/publish/:id', [authMiddleware, isSuperAdmin], async (req, res) => {
+    const circularId = req.params.id;
+    try {
+        const circular = await Circular.findById(circularId);
+        if (!circular) return res.status(404).json({ message: 'Circular not found' });
+        if (circular.status !== 'Approved') {
+            return res.status(400).json({ message: `Cannot publish circular with status '${circular.status}'. Must be 'Approved'.` });
+        }
+
+        circular.status = 'Published';
+        circular.publishedAt = new Date();
+        const updatedCircular = await circular.save();
+        const populatedCircular = await Circular.findById(updatedCircular._id)
+            .populate('author', 'name email')
+            .populate('signatories.authority', 'name position')
+            .populate('approvers.user', 'name email');
+        res.json(populatedCircular);
+    } catch (err) {
+        console.error("Error publishing circular:", err.message, err.stack);
+        res.status(500).json({ message: 'Server Error publishing circular' });
     }
 });
 
@@ -441,65 +444,40 @@ router.patch('/higher-review/:id', authMiddleware, async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
     try {
         const circular = await Circular.findById(req.params.id);
-        if (!circular) {
-            return res.status(404).json({ message: 'Circular not found' });
-        }
+        if (!circular) return res.status(404).json({ message: 'Circular not found' });
 
         const userRole = req.user.role;
         const userId = req.user.id;
         const canDeleteStatus = circular.status === 'Draft' || circular.status === 'Rejected';
-
-        // --- UPDATED LOGIC ---
         let isAuthor = false;
-        // Safely check if author exists before comparing
-        if (circular.author) {
-            isAuthor = circular.author.toString() === userId;
-        }
+        if (circular.author) { isAuthor = circular.author.toString() === userId; }
 
-        // Check permissions:
-        // 1. Super Admin can always delete.
-        if (userRole === 'Super Admin') {
+        if (userRole === 'Super Admin' || (isAuthor && canDeleteStatus)) {
             await Circular.findByIdAndDelete(req.params.id);
-            return res.json({ message: 'Circular deleted successfully (by Admin)' });
+            return res.json({ message: 'Circular deleted successfully' });
+        } else {
+            if (!isAuthor) return res.status(403).json({ message: 'User not authorized to delete this circular.' });
+            else return res.status(403).json({ message: `Cannot delete circular with status '${circular.status}'.` });
         }
-        // 2. Author can delete ONLY if status is Draft or Rejected.
-        else if (isAuthor && canDeleteStatus) {
-            await Circular.findByIdAndDelete(req.params.id);
-            return res.json({ message: 'Circular deleted successfully (by Author)' });
-        }
-        // 3. Otherwise, deny permission
-        else {
-            if (!isAuthor) {
-                return res.status(403).json({ message: 'User not authorized to delete this circular.' });
-            } else { // Must be the author, but status is wrong
-                return res.status(403).json({ message: `Cannot delete circular with status '${circular.status}'. Only Draft or Rejected can be deleted by the author.` });
-            }
-        }
-        // --- END UPDATED LOGIC ---
-
     } catch (err) {
-        console.error("Error deleting circular:", err.message, err.stack); // Added stack trace for better debugging
+        console.error("Error deleting circular:", err.message, err.stack);
         res.status(500).json({ message: 'Server Error deleting circular' });
     }
 });
-
-// --- NEW ROUTE for Super Admin All Circulars View ---
 // @route   GET api/circulars/all
 // @desc    Get ALL circulars with detailed population for SA overview
 // @access  Private (Super Admin ONLY)
-router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses isSuperAdmin middleware
+router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => {
     console.log("--- GET /api/circulars/all (SA Overview) ---");
     try {
-        // Find ALL circulars
-        const allCirculars = await Circular.find({}) // Empty query {} fetches all
-            .populate('author', 'name email') // Get author details
-            .populate('submittedTo', 'name email') // Get details of Admin/SA it's pending with
-            .populate('signatories.authority', 'name position') // Get signatory details
-            .populate('approvers.user', 'name email') // Get higher approver details
-            .sort({ createdAt: -1 }); // Sort by creation date, newest first
+        const allCirculars = await Circular.find({})
+            .populate('author', 'name email')
+            .populate('submittedTo', 'name email')
+            .populate('signatories.authority', 'name position')
+            .populate('approvers.user', 'name email')
+            .sort({ createdAt: -1 });
 
-        console.log(`Found ${allCirculars.length} total circulars for SA overview.`);
-
+        console.log(`Found ${allCirculars.length} total users for SA overview.`);
         res.json(allCirculars);
     } catch (err) {
         console.error("Error fetching all circulars:", err.message, err.stack);
@@ -507,8 +485,9 @@ router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses
     }
     console.log("--- END GET /api/circulars/all (SA Overview) ---");
 });
-// --- END NEW ROUTE ---
-
 
 module.exports = router; // Ensure this is at the very end
+
+
+
 

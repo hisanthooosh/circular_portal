@@ -193,5 +193,29 @@ router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses
     console.log("--- END GET /api/users/all (SA Overview) ---");
 });
 // --- END NEW ROUTE ---
+
+// --- NEW ROUTE for Super Admin All Users View ---
+// @route   GET api/users/all
+// @desc    Get ALL users in the system
+// @access  Private (Super Admin ONLY)
+router.get('/all', [authMiddleware, isSuperAdmin], async (req, res) => { // Uses isSuperAdmin middleware
+    console.log("--- GET /api/users/all (SA Overview) ---");
+    try {
+        // Find ALL users, exclude passwords, populate manager info
+        const allUsers = await User.find({}) // Empty query {} fetches all
+            .select('-password')
+            .populate('managedBy', 'name email') // Populate manager details
+            .sort({ role: 1, name: 1 }); // Sort by role, then name
+
+        console.log(`Found ${allUsers.length} total users for SA overview.`);
+
+        res.json(allUsers);
+    } catch (err) {
+        console.error("Error fetching all users:", err.message, err.stack);
+        res.status(500).json({ message: 'Server Error fetching all users' });
+    }
+    console.log("--- END GET /api/users/all (SA Overview) ---");
+});
+// --- END NEW ROUTE ---
 module.exports = router;
 

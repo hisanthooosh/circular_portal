@@ -127,19 +127,7 @@ function App() {
         setIsLoading(false);
     }, []);
 
-    const loadDashboardData = async () => {
-        if (!token) return;
-        setIsLoading(true);
-        try {
-            const circs = await api.getCirculars();
-            setCirculars(circs);
-        } catch (err) {
-            setError(err.message);
-            if (err.message.includes('401')) handleLogout();
-        } finally {
-            setIsLoading(false);
-        }
-    };
+    
 
     // Updated function to load users (for SA and Admin) and approvers (for SA only)
     const loadUsersAndApprovers = async () => {
@@ -243,8 +231,7 @@ function App() {
         }
     };
 
-    // Combined effect to load data based on page AND role access
-    // Combined effect to load data based on page AND role access// --- CORRECTED useEffect for Data Loading ---
+    // --- PASTE THIS NEW, CORRECTED useEffect block (replaces lines 274-354) ---
     useEffect(() => {
         // Only run if we have a token and user info (avoids running on initial load/logout)
         if (!token || !currentUser) {
@@ -256,6 +243,10 @@ function App() {
             setAllUsersOverview([]);
             setAllCircularsOverview([]); // Clear any other data states too
             console.log("useEffect: Skipping data load - No token or currentUser.");
+            // If not logged in AND not already on login page, force logout/redirect
+            if (page !== 'login') {
+                handleLogout(); // Use the existing logout function
+            }
             return; // Stop execution
         }
 
@@ -263,21 +254,24 @@ function App() {
         setError(''); // Clear errors on page change/reload
         setIsLoading(true); // Set loading true for all data fetches triggered by page change
 
-        // Define an async function to fetch data based on page and role
+        // Define an async function INSIDE useEffect to fetch data
         const fetchData = async () => {
             try {
-                // Fetch data common to multiple roles first? (e.g., circulars)
+                // Use a local copy of currentUser for safety inside async calls
+                const userForLoad = currentUser;
+
+                // Fetch data based on page and role
                 if (page === 'dashboard') {
                     const circData = await api.getCirculars();
                     setCirculars(circData);
                     // SA might also need approvers list for review modal on dashboard
-                    if (currentUser.role === 'Super Admin') {
+                    if (userForLoad.role === 'Super Admin') {
                         const userData = await api.getUsers(); // Use the filtered GET /api/users
                         setApprovers(userData.filter(u => u.role === 'Circular Approver'));
                     }
                 }
                 // Fetch data specific to Super Admin pages
-                else if (currentUser.role === 'Super Admin') {
+                else if (userForLoad.role === 'Super Admin') {
                     if (page === 'manageUsers') {
                         const userData = await api.getUsers(); // Fetches SA's direct reports + Admins
                         setUsers(userData);
@@ -287,19 +281,17 @@ function App() {
                     } else if (page === 'allUsersOverview') {
                         const allUserData = await api.getAllUsers(); // Fetches ALL users
                         setAllUsersOverview(allUserData);
-                    } else if (page === 'allCircularsOverview') { // Added missing page
+                    } else if (page === 'allCircularsOverview') {
                         const allCircData = await api.getAllCirculars();
                         setAllCircularsOverview(allCircData);
                     }
-                    // Load signatories if SA navigates to create page
                     else if (page === 'create') {
                         const sigData = await api.getSignatories();
                         setSignatories(sigData);
                     }
-
                 }
                 // Fetch data specific to Admin pages
-                else if (currentUser.role === 'Admin') {
+                else if (userForLoad.role === 'Admin') {
                     if (page === 'manageUsers') {
                         const userData = await api.getUsers(); // Fetches Admin's direct reports
                         setUsers(userData);
@@ -310,8 +302,8 @@ function App() {
                         setSignatories(sigData);
                     }
                 }
-                // Fetch data specific to Creator pages (mostly covered by dashboard load)
-                else if (currentUser.role === 'Circular Creator') {
+                // Fetch data specific to Creator pages
+                else if (userForLoad.role === 'Circular Creator') {
                     // Load signatories if Creator navigates to create page
                     if (page === 'create') {
                         const sigData = await api.getSignatories();
@@ -323,7 +315,7 @@ function App() {
             } catch (err) {
                 console.error(`FRONTEND: Error loading data for page ${page}:`, err);
                 setError(err.message || `Failed to load data for ${page}.`);
-                if (err.message && (err.message.includes('401') || err.message.includes('authorization denied'))) {
+                if (err.message && (err.message.includes('401') || err.message.includes('authorization denied') || err.message.includes('Token is not valid'))) {
                     handleLogout(); // Force logout on auth errors
                 }
             } finally {
@@ -334,8 +326,9 @@ function App() {
         fetchData(); // Execute the async data fetching function
 
         // Dependencies: Re-run when page changes, token changes, or user object changes
-    }, [page, token, currentUser, api]); // Added api as dependency because it depends on token
-    // --- END CORRECTION ---
+    }, [page, token, currentUser, api]); // Added api as dependency
+    // --- END OF REPLACEMENT BLOCK ---
+    // // --- END CORRECTION ---
     const handleLogin = async (email, password) => {
         setIsLoading(true);
         setError('');
@@ -617,6 +610,16 @@ function App() {
                     isLoading={isLoading}
                 />
             )}
+            {/* --- PASTE THE ADMIN MODAL CODE HERE --- */}
+            {isAdminReviewModalOpen && (
+                <AdminReviewModal
+                    circular={circularToAdminReview}
+                    onClose={() => setIsAdminReviewModalOpen(false)}
+                    onSubmit={handleAdminReview}
+                    isLoading={isLoading}
+                />
+            )}
+            {/* --- END PASTE --- */}
         </div>
     );
 }
@@ -700,15 +703,43 @@ function LoginPage({ onLogin, isLoading, error }) {
     );
 }
 
-// --- UPDATED DashboardPage ---
-function DashboardPage({ circulars, currentUser, onSubmitForApproval, onReview, onView, onDeleteCircular, onApproverReview, onAdminReview, onEditCircular }) { // Add onAdminReview
+// --- FINAL DashboardPage ---
+// Replace your existing DashboardPage function (around Line 388) with this entire block:
+function DashboardPage({ circulars = [], currentUser, onSubmitForApproval, onReview, onView, onDeleteCircular, onApproverReview, onAdminReview, onEditCircular, onPublishCircular }) {
     const getStatusClass = (status) => {
         switch (status) {
             case 'Approved': case 'Published': return 'bg-green-100 text-green-800';
-            case 'Pending Super Admin': case 'Pending Higher Approval': return 'bg-yellow-100 text-yellow-800';
+            case 'Pending Admin': case 'Pending Super Admin': case 'Pending Higher Approval': return 'bg-yellow-100 text-yellow-800';
             case 'Rejected': return 'bg-red-100 text-red-800';
             default: return 'bg-gray-100 text-gray-800'; // Draft
         }
+    };
+
+    // Helper to check if the current CA needs to review this circular
+    const isPendingThisApprover = (circular) => {
+        if (!circular || !currentUser || currentUser.role !== 'Circular Approver' || circular.status !== 'Pending Higher Approval') {
+            return false;
+        }
+        // Check if this approver is in the list AND their decision is still Pending
+        return circular.approvers?.find(appr => appr.user?._id === currentUser.id && appr.decision === 'Pending');
+    };
+
+    // Helper to check if the current Admin needs to review this circular
+    const isPendingThisAdmin = (circular) => {
+        if (!circular || !currentUser || currentUser.role !== 'Admin' || circular.status !== 'Pending Admin') {
+            return false;
+        }
+        // Check if the circular was submitted TO this specific Admin
+        return circular.submittedTo?._id === currentUser.id;
+    };
+
+    // Helper to check if the current Super Admin needs to review this circular
+    const isPendingThisSuperAdmin = (circular) => {
+        if (!circular || !currentUser || currentUser.role !== 'Super Admin' || circular.status !== 'Pending Super Admin') {
+            return false;
+        }
+        // Check if the circular was submitted TO this specific Super Admin
+        return circular.submittedTo?._id === currentUser.id;
     };
 
     return (
@@ -723,7 +754,8 @@ function DashboardPage({ circulars, currentUser, onSubmitForApproval, onReview, 
                             <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
                             <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                             <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Subject</th>
-                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Overall Status</th>
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Author</th>
+                            <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                             {/* Conditionally add CA Decision column */}
                             {currentUser.role === 'Circular Approver' && (
                                 <th className="py-2 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Your Decision</th>
@@ -732,113 +764,114 @@ function DashboardPage({ circulars, currentUser, onSubmitForApproval, onReview, 
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                        {circulars.length > 0 ? circulars.map(c => (
-                            <tr key={c._id} className="hover:bg-gray-50">
-                                <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-500">{new Date(c.date).toLocaleDateString()}</td>
-                                <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-700">{c.type}</td>
-                                <td className="py-3 px-4 font-medium text-gray-900">{c.subject}</td>
-                                <td className="py-3 px-4">
-                                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(c.status)}`}>
-                                        {c.status}
-                                    </span>
-                                    {c.status === 'Rejected' && c.rejectionReason && (
-                                        <p className="text-xs text-red-600 mt-1" title={c.rejectionReason}>
-                                            Reason: {c.rejectionReason.substring(0, 50)}{c.rejectionReason.length > 50 ? '...' : ''}
-                                        </p>
-                                    )}
-                                    {/* Optionally show CA feedback if rejected by CA */}
-                                    {c.status === 'Rejected' && c.approvers && c.approvers.find(a => a.decision === 'Rejected')?.feedback && (
-                                        <p className="text-xs text-red-600 mt-1" title={c.approvers.find(a => a.decision === 'Rejected').feedback}>
-                                            CA Reason: {c.approvers.find(a => a.decision === 'Rejected').feedback.substring(0, 50)}{c.approvers.find(a => a.decision === 'Rejected').feedback.length > 50 ? '...' : ''}
-                                        </p>
-                                    )}
-                                </td>
+                        {/* Add console log inside map for debugging status/submittedTo */}
+                        {circulars.length > 0 ? circulars.map(c => {
 
-                                {/* --- NEW CELL for CA's Decision --- */}
-                                {currentUser.role === 'Circular Approver' && (
-                                    <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-500">
-                                        {/* Logic to find and display this CA's decision */}
-                                        {c.approvers?.find(appr => appr.user?._id === currentUser.id)?.decision || 'N/A'}
+                            // --- ENSURE THIS LOG LINE IS HERE ---
+                            console.log(`Dashboard Row Render: ID=${c._id}, Status='${c.status}', SubmittedTo=${c.submittedTo?._id}(${c.submittedTo?.name})`);
+                            console.log(`Dashboard Row Render: ID=${c._id}, Status='${c.status}', Subject='${c.subject}', SubmittedTo=${c.submittedTo?._id}(${c.submittedTo?.name})`);
+                            return (
+                                <tr key={c._id} className="hover:bg-gray-50">
+                                    <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-500">{new Date(c.date).toLocaleDateString()}</td>
+                                    <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-700">{c.type}</td>
+                                    <td className="py-3 px-4 font-medium text-gray-900 max-w-xs truncate" title={c.subject}>{c.subject}</td>
+                                    <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-600">{c.author?.name || 'N/A'}</td>
+                                    <td className="py-3 px-4">
+                                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(c.status)}`}>
+                                            {c.status}
+                                        </span>
+                                        {/* Show rejection reason if applicable */}
+                                        {c.status === 'Rejected' && (c.rejectionReason || c.approvers?.find(a => a.decision === 'Rejected')?.feedback) && (
+                                            <p className="text-xs text-red-600 mt-1" title={c.rejectionReason || c.approvers?.find(a => a.decision === 'Rejected')?.feedback}>
+                                                Reason: {(c.rejectionReason || c.approvers?.find(a => a.decision === 'Rejected')?.feedback || '').substring(0, 50)}...
+                                            </p>
+                                        )}
+                                        {/* Show who it's pending with */}
+                                        {(c.status === 'Pending Admin' || c.status === 'Pending Super Admin') && c.submittedTo?.name && (
+                                            <p className="text-xs text-gray-500 mt-1">Pending: {c.submittedTo.name}</p>
+                                        )}
+                                        {c.status === 'Pending Higher Approval' && (
+                                            <p className="text-xs text-gray-500 mt-1">Pending CA ({c.approvers?.filter(a => a.decision === 'Pending').length || 0})</p>
+                                        )}
                                     </td>
-                                )}
-                                {/* --- END NEW CELL --- */}
-
-                                <td className="py-3 px-4 whitespace-nowrap text-sm font-medium space-x-2">
-                                    {/* View Button - Always available */}
-                                    <button onClick={() => onView(c)} className="text-gray-500 hover:text-gray-800" title="View Details">View</button>
-
-                                    {/* --- Circular Creator Actions --- */}
-                                    {currentUser.role === 'Circular Creator' && (
-                                        <>
-                                            {/* Submit appears for Draft OR Rejected */}
-                                            {(c.status === 'Draft' || c.status === 'Rejected') && (
-                                                <button onClick={() => onSubmitForApproval(c._id)} className="text-indigo-600 hover:text-indigo-900 font-semibold" title="Submit for review">Submit</button>
-                                            )}
-                                            {/* Edit appears for Draft OR Rejected */}
-                                            {(c.status === 'Draft' || c.status === 'Rejected') && (
-                                                <button onClick={() => onEditCircular(c)} className="text-blue-600 hover:text-blue-900" title="Edit Circular">Edit</button>
-                                            )}
-                                            {/* Delete appears for Draft OR Rejected */}
-                                            {(c.status === 'Draft' || c.status === 'Rejected') && (
-                                                <button onClick={() => onDeleteCircular(c._id)} className="text-red-600 hover:text-red-900" title="Delete Circular">Delete</button>
-                                            )}
-                                        </>
+                                    {/* --- CA's Decision Cell --- */}
+                                    {currentUser.role === 'Circular Approver' && (
+                                        <td className="py-3 px-4 whitespace-nowrap text-sm text-gray-500">
+                                            {c.approvers?.find(appr => appr.user?._id === currentUser.id)?.decision || 'N/A'}
+                                        </td>
                                     )}
+                                    {/* --- Actions Cell --- */}
+                                    <td className="py-3 px-4 whitespace-nowrap text-sm font-medium space-x-2">
+                                        {/* View Button - Always available */}
+                                        <button onClick={() => onView(c)} className="text-gray-500 hover:text-gray-800" title="View Details">View</button>
 
-                                    {/* --- Super Admin Actions --- */}
-                                    {currentUser.role === 'Super Admin' && (
-                                        <>
-                                            {c.status === 'Pending Super Admin' && (
-                                                <button onClick={() => onReview(c)} className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-xs" title="Review Submission">Review</button>
-                                            )}
-                                            {/* Allow SA to Edit Drafts/Rejected? Optional */}
-                                            {(c.status === 'Draft' || c.status === 'Rejected') && (
-                                                <button onClick={() => onEditCircular(c)} className="text-blue-600 hover:text-blue-900" title="Edit Circular (Admin)">Edit</button>
-                                            )}
-                                            <button onClick={() => onDeleteCircular(c._id)} className="text-red-600 hover:text-red-900" title="Delete Circular (Admin)">Delete</button>
-                                        </>
-                                    )}
-                                    {/* --- NEW Admin Actions --- */}
-                                    {currentUser.role === 'Admin' && c.status === 'Pending Admin' &&
-                                        // Check if this circular was submitted TO this admin
-                                        // Ensure c.submittedTo exists and access its _id property
-                                        c.submittedTo?._id === currentUser.id && (
-                                            <button
-                                                onClick={() => onAdminReview(c)} // Call the new handler passed via prop
-                                                className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600 text-xs"
-                                                title="Review this submission">
-                                                Review
-                                            </button>
+                                        {/* --- Circular Creator Actions --- */}
+                                        {currentUser.role === 'Circular Creator' && c.author?._id === currentUser.id && (
+                                            <>
+                                                {(c.status === 'Draft' || c.status === 'Rejected') && (
+                                                    <button onClick={() => onSubmitForApproval(c._id)} className="text-indigo-600 hover:text-indigo-900 font-semibold" title="Submit for review">Submit</button>
+                                                )}
+                                                {(c.status === 'Draft' || c.status === 'Rejected') && (
+                                                    <button onClick={() => onEditCircular(c)} className="text-blue-600 hover:text-blue-900" title="Edit Circular">Edit</button>
+                                                )}
+                                                {(c.status === 'Draft' || c.status === 'Rejected') && (
+                                                    <button onClick={() => onDeleteCircular(c._id)} className="text-red-600 hover:text-red-900" title="Delete Circular">Delete</button>
+                                                )}
+                                            </>
                                         )}
-                                    {/* --- END NEW Admin Actions --- */}
 
-                                    {/* --- Approver Actions --- */}
-                                    {currentUser.role === 'Circular Approver' && c.status === 'Pending Higher Approval' &&
-                                        // CORRECTED CHECK: Compare user._id with currentUser.id
-                                        c.approvers?.find(appr => appr.user?._id === currentUser.id && appr.decision === 'Pending') && (
-                                            <button
-                                                onClick={() => onApproverReview(c)} // Use the prop passed down
-                                                className="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600 text-xs"
-                                                title="Submit Your Review">
-                                                Review
-                                            </button>
+                                        {/* --- Admin Actions --- */}
+                                        {currentUser.role === 'Admin' && isPendingThisAdmin(c) && ( // Use helper
+                                            <button onClick={() => onAdminReview(c)} className="bg-green-500 text-white px-3 py-1 rounded hover:bg-green-600 text-xs" title="Review this submission">Review</button>
                                         )}
-                                </td>
-                            </tr>
-                        )) : (
+                                        {currentUser.role === 'Admin' && c.author?._id === currentUser.id && (c.status === 'Draft' || c.status === 'Rejected') && (
+                                            <>
+                                                <button onClick={() => onEditCircular(c)} className="text-blue-600 hover:text-blue-900" title="Edit Your Circular">Edit</button>
+                                                <button onClick={() => onDeleteCircular(c._id)} className="text-red-600 hover:text-red-900" title="Delete Your Circular">Delete</button>
+                                            </>
+                                        )}
+
+
+                                        {/* --- Super Admin Actions --- */}
+                                        {currentUser.role === 'Super Admin' && (
+                                            <>
+                                                {/* CORRECTED CHECK for SA Review Button */}
+                                                {isPendingThisSuperAdmin(c) && ( // Use helper function
+                                                    <button onClick={() => onReview(c)} className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-xs" title="Review Submission">Review</button>
+                                                )}
+                                                {/* Edit Button for SA */}
+                                                {(c.status === 'Draft' || c.status === 'Rejected') && ( // Allow SA to edit any draft/rejected
+                                                    <button onClick={() => onEditCircular(c)} className="text-blue-600 hover:text-blue-900" title="Edit Circular (Admin)">Edit</button>
+                                                )}
+                                                {/* Publish Button */}
+                                                {c.status === 'Approved' && (
+                                                    <button onClick={() => onPublishCircular(c._id)} className="bg-teal-500 text-white px-3 py-1 rounded hover:bg-teal-600 text-xs" title="Publish this circular">Publish</button>
+                                                )}
+                                                {/* Delete Button for SA */}
+                                                <button onClick={() => onDeleteCircular(c._id)} className="text-red-600 hover:text-red-900" title="Delete Circular (Admin)">Delete</button>
+                                            </>
+                                        )}
+
+                                        {/* --- Approver Actions --- */}
+                                        {currentUser.role === 'Circular Approver' && isPendingThisApprover(c) && ( // Use helper
+                                            <button onClick={() => onApproverReview(c)} className="bg-purple-500 text-white px-3 py-1 rounded hover:bg-purple-600 text-xs" title="Submit Your Review">Review</button>
+                                        )}
+                                    </td>
+                                </tr>
+                            ); // End return for map
+                        }) : ( // Else for map (no circulars)
+                            // Correctly placed table row for "No circulars"
                             <tr>
-
-                                <td colSpan={currentUser.role === 'Circular Approver' ? 6 : 5} className="text-center py-10 text-gray-500">No circulars found.</td>
+                                <td colSpan={currentUser.role === 'Circular Approver' ? 7 : 6} className="text-center py-10 text-gray-500">No circulars found.</td>
                             </tr>
                         )}
-
                     </tbody>
                 </table>
             </div>
         </div>
     );
 }
-// --- UPDATED CreateCircularPage (Handles Editing) ---
+
 // --- UPDATED CreateCircularPage (Handles Editing, Fixed Preview, Better Styling) ---
 function CreateCircularPage({ onSubmit, onCancel, availableSignatories = [], error, circularToEdit }) { // Added default for availableSignatories
     const [isPreview, setIsPreview] = useState(false);
@@ -1466,17 +1499,7 @@ function ApproverReviewModal({ circular, onClose, onSubmit, isLoading }) {
         }
         onSubmit(circular._id, { decision, feedback });
     };
-    {/* --- NEW Admin Review Modal --- */ }
-    {
-        isAdminReviewModalOpen && (
-            <AdminReviewModal
-                circular={circularToAdminReview}
-                onClose={() => setIsAdminReviewModalOpen(false)}
-                onSubmit={handleAdminReview}
-                isLoading={isLoading}
-            />
-        )
-    }
+
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
