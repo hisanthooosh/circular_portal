@@ -127,7 +127,7 @@ function App() {
         setIsLoading(false);
     }, []);
 
-    
+
 
     // Updated function to load users (for SA and Admin) and approvers (for SA only)
     const loadUsersAndApprovers = async () => {
@@ -1358,14 +1358,37 @@ function ViewCircularPage({ circular, onBack, isPreview = false, availableSignat
     return (
         <>
             <div className="bg-white p-8 rounded-lg shadow-lg max-w-4xl mx-auto print-area text-gray-800 printable-content">
-                {/* --- Header --- */}
-                <div className="text-center mb-8 border-b-2 pb-4 border-gray-300">
-                    <h1 className="text-3xl font-bold text-red-700">MOHAN BABU UNIVERSITY</h1>
-                    <p className="text-gray-600">Sree Sainath Nagar, Tirupati - 517 102, A.P.</p>
-                </div>
+                {/* --- NEW HEADER (Side-by-Side, Balanced Size, Center Aligned Text) --- */}
+                <div className="flex justify-between items-center mb-8 border-b-2 pb-4 border-gray-300">
 
-                {/* --- Meta Info --- */}
-                <div className="flex justify-between items-start mb-6">
+                    {/* 1. Logo on the left (Balanced h-24 size) */}
+                    <div className="flex-shrink-0">
+                        <img
+                            src="/mbulogo.webp"
+                            alt="Mohan Babu University Logo"
+                            className="h-24"  
+                        />
+                    </div>
+
+                    {/* 2. Text block on the right (font-serif, text-center) */}
+                    <div className="text-center flex-grow font-serif"> {/* <-- YOUR REQUEST: text-center */}
+
+                        <h1 className="text-3xl font-bold" style={{ color: '#003366' }}>
+                            MOHAN BABU UNIVERSITY
+                        </h1>
+                        <p className="text-base text-gray-700 mt-1">
+                            Sree Sainath Nagar, Tirupati – 517 102, A.P.
+                        </p>
+                        <p className="text-sm text-gray-600 mt-1">
+                            (Established under Andhra Pradesh Private Universities
+                        </p>
+                        <p className="text-sm text-gray-600">
+                            (Establishment & Regulation) Act 2016 (Act No.3 of 2016))
+                        </p>
+                    </div>
+                </div>
+                {/* --- END NEW HEADER --- */}
+                {/* --- END CENTERED HEADER --- */}                <div className="flex justify-between items-start mb-6">
                     <span className="font-semibold text-sm">No: {circular.circularNumber || '[Number Not Set]'}</span>
                     <div className="text-right">
                         <p className="font-semibold text-sm">{circular.type ? circular.type.toUpperCase() : 'DOCUMENT'}</p>
