@@ -1128,7 +1128,13 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
     }
 
     const handleSubmit = () => {
-        const decisionData = { decision };
+        // Basic validation
+        if (decision === 'Reject' && !rejectionReason.trim()) {
+             alert('A reason is required when rejecting.');
+             return;
+        }
+
+        const decisionData = { decision }; // 'decision' will be "Approve" or "Reject"
         if (decision === 'Reject') {
             decisionData.rejectionReason = rejectionReason;
         } else if (decision === 'Approve' && selectedApprovers.length > 0) {
@@ -1142,21 +1148,25 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
             <div className="bg-white rounded-lg shadow-xl p-8 w-full max-w-2xl text-gray-800">
                 <h2 className="text-2xl font-bold mb-4">Review Circular</h2>
                 <div className="mb-4 p-4 border rounded-md bg-gray-50">
-                    <p><strong>Title:</strong> {circular.title}</p>
+                    {/* Use circular.subject which is the new field */}
+                    <p><strong>Subject:</strong> {circular.subject || circular.title}</p> 
                     <p><strong>Circular No:</strong> {circular.circularNumber}</p>
                 </div>
                 <div className="space-y-4">
                     <div>
                         <label className="block font-bold mb-2">Decision</label>
                         <select value={decision} onChange={(e) => setDecision(e.target.value)} className="w-full p-2 border rounded-md bg-white">
-                            <option>Approve</option>
-                            <option>Reject it.</option>
+                            <option value="Approve">Approve</option>
+                            {/* --- THIS IS THE FIX --- */}
+                            <option value="Reject">Reject</option> 
+                            {/* --- END FIX --- */}
                         </select>
                     </div>
-                    {decision === 'Reject' && (
+                    {/* This check for 'Reject' will now work */}
+                    {decision === 'Reject' && ( 
                         <div>
-                            <label className="block font-bold mb-2">Reason for Rejection</label>
-                            <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows="3" className="w-full p-2 border rounded-md"></textarea>
+                            <label className="block font-bold mb-2">Reason for Rejection <span className="text-red-500">*</span></label>
+                            <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows="3" className="w-full p-2 border rounded-md" placeholder="Provide a reason..." required></textarea>
                         </div>
                     )}
                     {decision === 'Approve' && (
@@ -1164,7 +1174,8 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
                             <label className="block font-bold mb-2">Send for Higher Approval (Optional)</label>
                             <p className="text-sm text-gray-500 mb-2">Select one or more approvers if this circular needs a final check from higher authorities.</p>
                             <select multiple value={selectedApprovers} onChange={handleApproverChange} className="w-full p-2 border rounded-md h-32 bg-white">
-                                {approvers.map(a => <option key={a._id} value={a._id}>{a.name} ({a.email})</option>)}
+                                {/* Make sure approvers list is valid before mapping */}
+                                {(approvers || []).map(a => <option key={a._id} value={a._id}>{a.name} ({a.email})</option>)}
                             </select>
                         </div>
                     )}
@@ -1179,7 +1190,6 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
         </div>
     );
 }
-// --- UPDATED ManageUsersPage (Handles SA view with two tables) ---
 function ManageUsersPage({ users = [], onAddUser, onDeleteUser, error, currentUser }) { // Added default for users
     // --- Log 1: Check props received ---
     console.log("ManageUsersPage: Component rendered. Received props:", { users, currentUser, error });
