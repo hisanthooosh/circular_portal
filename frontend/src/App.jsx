@@ -1130,8 +1130,8 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
     const handleSubmit = () => {
         // Basic validation
         if (decision === 'Reject' && !rejectionReason.trim()) {
-             alert('A reason is required when rejecting.');
-             return;
+            alert('A reason is required when rejecting.');
+            return;
         }
 
         const decisionData = { decision }; // 'decision' will be "Approve" or "Reject"
@@ -1149,7 +1149,7 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
                 <h2 className="text-2xl font-bold mb-4">Review Circular</h2>
                 <div className="mb-4 p-4 border rounded-md bg-gray-50">
                     {/* Use circular.subject which is the new field */}
-                    <p><strong>Subject:</strong> {circular.subject || circular.title}</p> 
+                    <p><strong>Subject:</strong> {circular.subject || circular.title}</p>
                     <p><strong>Circular No:</strong> {circular.circularNumber}</p>
                 </div>
                 <div className="space-y-4">
@@ -1158,12 +1158,12 @@ function ReviewModal({ circular, approvers, onClose, onSubmit, isLoading }) {
                         <select value={decision} onChange={(e) => setDecision(e.target.value)} className="w-full p-2 border rounded-md bg-white">
                             <option value="Approve">Approve</option>
                             {/* --- THIS IS THE FIX --- */}
-                            <option value="Reject">Reject</option> 
+                            <option value="Reject">Reject</option>
                             {/* --- END FIX --- */}
                         </select>
                     </div>
                     {/* This check for 'Reject' will now work */}
-                    {decision === 'Reject' && ( 
+                    {decision === 'Reject' && (
                         <div>
                             <label className="block font-bold mb-2">Reason for Rejection <span className="text-red-500">*</span></label>
                             <textarea value={rejectionReason} onChange={(e) => setRejectionReason(e.target.value)} rows="3" className="w-full p-2 border rounded-md" placeholder="Provide a reason..." required></textarea>
@@ -1367,7 +1367,7 @@ function ViewCircularPage({ circular, onBack, isPreview = false, availableSignat
 
     return (
         <>
-            <div className="bg-white p-8 rounded-lg shadow-lg max-w-4xl mx-auto print-area text-gray-800 printable-content">
+            <div className="bg-white py-8 pr-8 pl-16 rounded-lg shadow-lg max-w-4xl mx-auto print-area text-gray-800 printable-content">
                 {/* --- NEW HEADER (Side-by-Side, Balanced Size, Center Aligned Text) --- */}
                 <div className="flex justify-between items-center mb-8 border-b-2 pb-4 border-gray-300">
 
@@ -1376,7 +1376,7 @@ function ViewCircularPage({ circular, onBack, isPreview = false, availableSignat
                         <img
                             src="/mbulogo.webp"
                             alt="Mohan Babu University Logo"
-                            className="h-24"  
+                            className="h-24"
                         />
                     </div>
 
@@ -1397,19 +1397,27 @@ function ViewCircularPage({ circular, onBack, isPreview = false, availableSignat
                         </p>
                     </div>
                 </div>
-                {/* --- END NEW HEADER --- */}
-                {/* --- END CENTERED HEADER --- */}                <div className="flex justify-between items-start mb-6">
+                {/* --- Meta Info (Date & Number) --- */}
+                <div className="flex justify-between items-start mb-6">
                     <span className="font-semibold text-sm">No: {circular.circularNumber || '[Number Not Set]'}</span>
                     <div className="text-right">
-                        <p className="font-semibold text-sm">{circular.type ? circular.type.toUpperCase() : 'DOCUMENT'}</p>
+                        {/* Date is now alone on the right */}
                         <p className="font-semibold text-sm">Date: {circular.date ? new Date(circular.date).toLocaleDateString('en-GB', { timeZone: 'UTC' }) : '[Date Not Set]'}</p>
                     </div>
                 </div>
 
-                {/* --- Subject --- */}
+                {/* --- Centered Title Block (NEW) --- */}
                 <div className="my-8 text-center">
-                    <h3 className="text-lg font-bold underline">SUB: {circular.subject || '[Subject Not Set]'}</h3>
+                    {/* 1. The Type (e.g., "CIRCULAR") */}
+                    <h3 className="text-xl font-bold mt-1">
+                        {(circular.type || 'DOCUMENT').toUpperCase()}
+                    </h3>
+                    {/* 2. The Subject */}
+                    <h3 className="text-lg font-bold underline mt-2">
+                        SUB: {circular.subject || '[Subject Not Set]'}
+                    </h3>
                 </div>
+                {/* --- END NEW BLOCK --- */}
 
                 {/* --- Body --- */}
                 <p className="text-base leading-relaxed mb-8 whitespace-pre-wrap">{circular.body || '[Body Content Not Set]'}</p>
